@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+dist
+data
+*.db
+*.db-shm
+*.db-wal
+reports
+uploads
+.env.local
+dev-server.log
+dev-server.err.log
+tsconfig.tsbuildinfo

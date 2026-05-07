@@ -1,0 +1,316 @@
+import { normalizeReference } from '../core/reference';
+import type { MatchRow, NormalizedTxn, ParseResult, ReconcileResult, VoucherType } from '../core/types';
+import { emptyAiUsage, getAiConfig, type AiConfig } from '../core/aiConfig';
+
+type JsonSchema = Record<string, unknown>;
+
+export type AiReferenceExtraction = {
+  rowId: string;
+  fullReferences: string[];
+  partialReferences: string[];
+  shortBillNumbers: string[];
+  chequeNumbers: string[];
+  poNumbers: string[];
+  confidence: number;
+  reason: string;
+};
+
+export type AiJournalClassification = {
+  rowId: string;
+  voucherType:
+    | 'TDS'
+    | 'JOURNAL_TDS'
+    | 'JOURNAL_INVOICE'
+    | 'CREDIT_NOTE'
+    | 'DEBIT_NOTE'
+    | 'REVERSAL'
+    | 'PAYMENT'
+    | 'OPENING'
+    | 'JOURNAL_ADJUSTMENT'
+    | 'OTHER';
+  confidence: number;
+  reason: string;
+};
+
+export type AiPossibleMatch = {
+  rdcRowId: string;
+  customerRowId: string;
+  matchType: 'POSSIBLE_MATCH';
+  confidence: number;
+  reason: string;
+  suggestedStatus: 'MATCHED_AI_REVIEW_REQUIRED' | 'POSSIBLE_MATCH_REVIEW_REQUIRED';
+};
+
+async function client(config = getAiConfig()) {
+  if (!config.enabled) return undefined;
+  const { default: OpenAI } = await import('openai');
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+}
+
+async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, config = getAiConfig()): Promise<T | undefined> {
+  try {
+    const openai = await client(config);
+    if (!openai) return undefined;
+    const response = await openai.responses.create({
+      model: config.model,
+      instructions: [
+        'You are an expert Indian accounting ledger reconciliation assistant for RDC customer/vendor ledger reconciliation.',
+        'Respect this sign convention: RDC debit to customer is positive receivable; RDC credit is negative. In customer books, credit to RDC is positive in RDC receivable view and debit to RDC is negative.',
+        'Return strict JSON only. Do not include prose, markdown, or commentary.',
+        'AI is not final authority. Provide extraction/classification suggestions with confidence and reason for audit review.',
+      ].join('\n'),
+      input: JSON.stringify(input),
+      text: {
+        format: {
+          type: 'json_schema',
+          name,
+          strict: true,
+          schema,
+        },
+      },
+    });
+    return JSON.parse(response.output_text) as T;
+  } catch (error) {
+    console.error(`[ai] ${name} failed; continuing deterministic reconciliation`, error);
+    return undefined;
+  }
+}
+
+const referencesSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    rowId: { type: 'string' },
+    fullReferences: { type: 'array', items: { type: 'string' } },
+    partialReferences: { type: 'array', items: { type: 'string' } },
+    shortBillNumbers: { type: 'array', items: { type: 'string' } },
+    chequeNumbers: { type: 'array', items: { type: 'string' } },
+    poNumbers: { type: 'array', items: { type: 'string' } },
+    confidence: { type: 'number' },
+    reason: { type: 'string' },
+  },
+  required: ['rowId', 'fullReferences', 'partialReferences', 'shortBillNumbers', 'chequeNumbers', 'poNumbers', 'confidence', 'reason'],
+};
+
+const journalSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    rowId: { type: 'string' },
+    voucherType: { type: 'string', enum: ['TDS', 'JOURNAL_TDS', 'JOURNAL_INVOICE', 'CREDIT_NOTE', 'DEBIT_NOTE', 'REVERSAL', 'PAYMENT', 'OPENING', 'JOURNAL_ADJUSTMENT', 'OTHER'] },
+    confidence: { type: 'number' },
+    reason: { type: 'string' },
+  },
+  required: ['rowId', 'voucherType', 'confidence', 'reason'],
+};
+
+const possibleMatchesSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    matches: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          rdcRowId: { type: 'string' },
+          customerRowId: { type: 'string' },
+          matchType: { type: 'string', enum: ['POSSIBLE_MATCH'] },
+          confidence: { type: 'number' },
+          reason: { type: 'string' },
+          suggestedStatus: { type: 'string', enum: ['MATCHED_AI_REVIEW_REQUIRED', 'POSSIBLE_MATCH_REVIEW_REQUIRED'] },
+        },
+        required: ['rdcRowId', 'customerRowId', 'matchType', 'confidence', 'reason', 'suggestedStatus'],
+      },
+    },
+  },
+  required: ['matches'],
+};
+
+export async function aiDetectLedgerFormat(sampleRows: unknown[], fileMeta: unknown, config?: AiConfig) {
+  return strictJson('ledger_format_detection', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      format: { type: 'string' },
+      confidence: { type: 'number' },
+      reason: { type: 'string' },
+    },
+    required: ['format', 'confidence', 'reason'],
+  }, { sampleRows, fileMeta }, config);
+}
+
+export async function aiMapColumns(sampleRows: unknown[], detectedHeaders: string[], config?: AiConfig) {
+  return strictJson('ledger_column_mapping', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      date: { type: 'string' },
+      voucherType: { type: 'string' },
+      voucherNo: { type: 'string' },
+      reference: { type: 'string' },
+      narration: { type: 'string' },
+      debit: { type: 'string' },
+      credit: { type: 'string' },
+      confidence: { type: 'number' },
+      reason: { type: 'string' },
+    },
+    required: ['date', 'voucherType', 'voucherNo', 'reference', 'narration', 'debit', 'credit', 'confidence', 'reason'],
+  }, { sampleRows, detectedHeaders }, config);
+}
+
+export async function aiExtractReferences(row: NormalizedTxn, context: unknown, config?: AiConfig) {
+  return strictJson<AiReferenceExtraction>('reference_extraction', referencesSchema, { row, context }, config);
+}
+
+export async function aiClassifyJournal(row: NormalizedTxn, context: unknown, config?: AiConfig) {
+  return strictJson<AiJournalClassification>('journal_classification', journalSchema, { row, context }, config);
+}
+
+export async function aiClassifyTransaction(row: NormalizedTxn, context: unknown, config?: AiConfig) {
+  return aiClassifyJournal(row, context, config);
+}
+
+export async function aiReviewPossibleMatches(unmatchedRdcRows: MatchRow[], unmatchedCustomerRows: MatchRow[], config?: AiConfig) {
+  const result = await strictJson<{ matches: AiPossibleMatch[] }>('possible_match_review', possibleMatchesSchema, {
+    unmatchedRdcRows: unmatchedRdcRows.slice(0, 60).map(slimMatch),
+    unmatchedCustomerRows: unmatchedCustomerRows.slice(0, 60).map(slimMatch),
+  }, config);
+  return result?.matches || [];
+}
+
+export async function aiGenerateRecoStatement(summary: unknown, exceptions: unknown, config?: AiConfig) {
+  return strictJson('reco_statement_review', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      lines: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            action: { type: 'string' },
+            particular: { type: 'string' },
+            amount: { type: 'number' },
+            remarks: { type: 'string' },
+            confidence: { type: 'number' },
+          },
+          required: ['action', 'particular', 'amount', 'remarks', 'confidence'],
+        },
+      },
+    },
+    required: ['lines'],
+  }, { summary, exceptions }, config);
+}
+
+export async function aiEnhanceParseResult(parseResult: ParseResult, sourceSide: 'RDC' | 'CUSTOMER', config = getAiConfig()) {
+  const usage = emptyAiUsage(config);
+  if (!config.enabled || sourceSide !== 'CUSTOMER') return usage;
+  const candidates = parseResult.transactions
+    .filter((txn) => txn.parseConfidence < 85 || !txn.normalizedReferenceNo || txn.voucherType.startsWith('JOURNAL'))
+    .slice(0, config.maxRows);
+  for (const txn of candidates) {
+    usage.rowsReviewed += 1;
+    const context = { sourceSide, signConvention: 'customer credit to RDC is positive; customer debit to RDC is negative' };
+    if (!txn.normalizedReferenceNo || txn.parseConfidence < 85) {
+      const aiRefs = await aiExtractReferences(txn, context, config);
+      if (aiRefs) {
+        txn.aiExtractedReferences = aiRefs.fullReferences;
+        txn.aiConfidence = aiRefs.confidence;
+        txn.aiReason = aiRefs.reason;
+        txn.parserNotes = [...(txn.parserNotes || []), `AI reference review: ${aiRefs.reason}`];
+        if (aiRefs.fullReferences.length && aiRefs.confidence >= config.confidenceThreshold) {
+          txn.extractedReferences = Array.from(new Set([...(txn.extractedReferences || []), ...aiRefs.fullReferences]));
+          txn.referenceNo ||= aiRefs.fullReferences[0];
+          txn.normalizedReferenceNo ||= normalizeReference(aiRefs.fullReferences[0]);
+          txn.parseConfidence = Math.max(txn.parseConfidence, Math.round(aiRefs.confidence * 100));
+          usage.referencesExtracted += aiRefs.fullReferences.length;
+        } else if (aiRefs.partialReferences.length) {
+          txn.parserNotes = [...(txn.parserNotes || []), 'LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW'];
+        }
+      }
+    }
+    if (txn.voucherType.startsWith('JOURNAL')) {
+      const aiJournal = await aiClassifyJournal(txn, context, config);
+      if (aiJournal) {
+        txn.aiSuggestedVoucherType = aiJournal.voucherType as VoucherType;
+        txn.aiConfidence = aiJournal.confidence;
+        txn.aiReason = aiJournal.reason;
+        txn.parserNotes = [...(txn.parserNotes || []), `AI journal review: ${aiJournal.reason}`];
+        if (aiJournal.confidence >= config.confidenceThreshold) {
+          txn.voucherType = aiJournal.voucherType as VoucherType;
+          usage.journalRowsClassified += 1;
+        }
+      }
+    }
+  }
+  parseResult.parserLog.push({ sourceFile: 'AI', level: 'info', message: `AI reviewed ${usage.rowsReviewed} rows; extracted ${usage.referencesExtracted} references; classified ${usage.journalRowsClassified} journals`, confidence: 100 });
+  return usage;
+}
+
+export async function aiEnhanceReconciliation(result: ReconcileResult, config = getAiConfig()) {
+  const usage = result.aiUsage || emptyAiUsage(config);
+  if (!config.enabled) {
+    result.aiUsage = usage;
+    addAiCards(result, usage);
+    return result;
+  }
+  const suggestions = await aiReviewPossibleMatches(result.unmatchedRdc, result.unmatchedCustomer, config);
+  usage.possibleMatchesSuggested += suggestions.length;
+  for (const suggestion of suggestions) {
+    const rdc = result.unmatchedRdc.find((row) => row.rdcTxn?.id === suggestion.rdcRowId);
+    const customer = result.unmatchedCustomer.find((row) => row.customerTxn?.id === suggestion.customerRowId);
+    if (!rdc || !customer) continue;
+    usage.requiresHumanReview += 1;
+    result.possibleMatches.push({
+      matchId: `ai-${suggestion.rdcRowId}-${suggestion.customerRowId}`,
+      matchStatus: 'POSSIBLE',
+      reasonCode: 'POSSIBLE_MATCH_REVIEW_REQUIRED',
+      rdcTxn: rdc.rdcTxn,
+      customerTxn: customer.customerTxn,
+      rdcAmount: rdc.rdcAmount,
+      customerAmount: customer.customerAmount,
+      difference: (rdc.rdcAmount || 0) - (customer.customerAmount || 0),
+      confidence: Math.round(suggestion.confidence * 100),
+      remarks: `AI review: ${suggestion.reason}`,
+    });
+  }
+  result.aiUsage = usage;
+  addAiCards(result, usage);
+  return result;
+}
+
+export function attachAiUsage(result: ReconcileResult, usage = emptyAiUsage()) {
+  result.aiUsage = usage;
+  addAiCards(result, usage);
+  return result;
+}
+
+function addAiCards(result: ReconcileResult, usage: ReturnType<typeof emptyAiUsage>) {
+  result.cards.aiEnabled = usage.enabled ? 1 : 0;
+  result.cards.aiRowsReviewed = usage.rowsReviewed;
+  result.cards.aiReferencesExtracted = usage.referencesExtracted;
+  result.cards.aiJournalRowsClassified = usage.journalRowsClassified;
+  result.cards.aiPossibleMatchesSuggested = usage.possibleMatchesSuggested;
+  result.cards.aiAutoAccepted = usage.autoAccepted;
+  result.cards.aiRequiresHumanReview = usage.requiresHumanReview;
+}
+
+function slimMatch(row: MatchRow) {
+  const txn = row.rdcTxn || row.customerTxn;
+  return {
+    rowId: txn?.id,
+    sourceSide: txn?.sourceSide,
+    sourceRow: txn?.sourceRow,
+    date: txn?.date,
+    voucherType: txn?.voucherType,
+    referenceNo: txn?.referenceNo,
+    normalizedReferenceNo: txn?.normalizedReferenceNo,
+    chequeNo: txn?.chequeNo,
+    narration: txn?.narration || txn?.particulars,
+    amount: txn?.signedAmountRdcView,
+    reasonCode: row.reasonCode,
+  };
+}

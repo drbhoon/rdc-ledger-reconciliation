@@ -1,0 +1,36 @@
+{
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "start:railway": "next start -p ${PORT:-3000}",
+    "recon:samples": "tsx scripts/run-samples.ts",
+    "test:samples": "tsx scripts/test-samples.ts"
+  },
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "dependencies": {
+    "@types/node": "^20.17.24",
+    "@types/pdfkit": "^0.17.6",
+    "@types/react": "^19.0.12",
+    "@types/react-dom": "^19.0.4",
+    "date-fns": "^4.1.0",
+    "exceljs": "^4.4.0",
+    "next": "^15.2.3",
+    "openai": "^6.36.0",
+    "pdf-parse": "^1.1.1",
+    "pdfkit": "^0.18.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "uuid": "^11.1.0",
+    "xlsx": "^0.18.5",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "eslint": "^9.22.0",
+    "eslint-config-next": "^15.2.3"
+  }
+}

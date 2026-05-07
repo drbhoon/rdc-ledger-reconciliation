@@ -1,0 +1,217 @@
+﻿RDC Debtors Ledger Excel Report                   ,,,,,,,,,,,,
+,,,,,,,,,,,,
+Customer Name      :  ,"ELITE CONTRACTORS (CHENNAI) PRIVATE LTD, - VIT",,,,,,,,,,,
+Customer Number  : ,138847,,,,,,,,,,,
+From Period             : ,01-Apr-24,,,,,,,,,,,
+To Period                  : ,31-Mar-25,,,,,,,,,,,
+,,,,,,,,,,,,
+,,,,,,,,,,,,
+Inv/ Receipt Date,Doc Type,Plant Name,Inv / Receipt Number,Ship To Address,Transaction Type,Due Date,GST Inv Number,Document Seq Number,Item Description,Quantity,Tran Dr Amt (Rs),Tran Cr Amt (Rs)
+,,Customer Opening Balance,,,,,,,,,"95,07,024.00",0
+16-Apr-24,INV,Chennai-2 RMC Plant,2444022,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,16-Apr-24,2CH24ARS524,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+16-Apr-24,INV,Chennai-Pudupakkam,2444037,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,16-Apr-24,9CH24ARS149,2.43321E+12,M40,7,"44,604.00",0
+16-Apr-24,INV,Chennai-2 RMC Plant,2444040,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,16-Apr-24,2CH24ARS525,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+16-Apr-24,INV,Chennai-2 RMC Plant,2444049,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,16-Apr-24,2CH24ARS526,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+16-Apr-24,INV,Chennai-Pudupakkam,2444051,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,16-Apr-24,9CH24ARS150,2.43321E+12,M40,7,"44,604.00",0
+16-Apr-24,INV,Chennai-Pudupakkam,2444152,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,16-Apr-24,9CH24ARS151,2.43321E+12,M40,7,"44,604.00",0
+16-Apr-24,INV,Chennai-2 RMC Plant,2444179,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,16-Apr-24,2CH24ARS527,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+16-Apr-24,INV,Chennai-2 RMC Plant,2444190,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,16-Apr-24,2CH24ARS528,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+16-Apr-24,INV,Chennai-Pudupakkam,2444983,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,16-Apr-24,9CH24ARS152,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2444234,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS530,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2444246,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS531,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2444259,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS532,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2444279,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS533,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2444292,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS534,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2444306,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS153,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2444312,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS535,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2444328,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS154,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2445878,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS551,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2445888,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS160,2.43321E+12,M40,10,"63,720.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2445901,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS161,2.43321E+12,M40,6,"38,232.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2445931,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS552,2.4332E+12,M40 Grade of concrete,1,"6,372.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2445935,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS162,2.43321E+12,M40,9,"57,348.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2445939,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS553,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2445943,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS163,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2445948,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS554,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2445958,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS164,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2445963,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS555,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2445968,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS165,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2445973,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS556,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2445983,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS166,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-3 RMC Plant,2445982,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,17-Apr-24,3CH24ARS227,2.4332E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2445985,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS557,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2446003,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS559,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2446014,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS560,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2446026,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS561,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-3 RMC Plant,2446029,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,17-Apr-24,3CH24ARS228,2.4332E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2446036,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS167,2.43321E+12,M40,6,"38,232.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2446039,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS562,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2446052,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS563,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2446069,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS168,2.43321E+12,M40,10,"63,720.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2446080,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS169,2.43321E+12,M40,6,"38,232.00",0
+17-Apr-24,INV,Chennai-1 RMC Plant,2446090,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai SI,17-Apr-24,1CH24ARS531,2.4332E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2446100,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS170,2.43321E+12,M40,9,"57,348.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2446103,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS564,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+17-Apr-24,INV,Chennai-3 RMC Plant,2446121,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,17-Apr-24,3CH24ARS229,2.4332E+12,M40,9,"57,348.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2446128,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS171,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2446129,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS565,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2446142,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS566,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2446143,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS172,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-1 RMC Plant,2446151,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai SI,17-Apr-24,1CH24ARS533,2.4332E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-3 RMC Plant,2446152,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,17-Apr-24,3CH24ARS230,2.4332E+12,M40,9,"57,348.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2446159,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS173,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2446166,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS567,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2446177,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS174,2.43321E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-3 RMC Plant,2446182,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,17-Apr-24,3CH24ARS231,2.4332E+12,M40,9,"57,348.00",0
+17-Apr-24,INV,Chennai-2 RMC Plant,2446188,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,17-Apr-24,2CH24ARS568,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+17-Apr-24,INV,Chennai-1 RMC Plant,2446192,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai SI,17-Apr-24,1CH24ARS534,2.4332E+12,M40,7,"44,604.00",0
+17-Apr-24,INV,Chennai-Pudupakkam,2446194,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,17-Apr-24,9CH24ARS175,2.43321E+12,M40,6,"38,232.00",0
+17-Apr-24,CM,Chennai-2 RMC Plant,306209,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 Wron In C,17-Apr-24,2CH24ARCM20,2.4332E+12,,-1,0,"6,372.00"
+18-Apr-24,INV,Chennai-2 RMC Plant,2446193,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS569,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-1 RMC Plant,2446208,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai SI,18-Apr-24,1CH24ARS535,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446223,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS571,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446224,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS176,2.43321E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446231,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS232,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446241,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS572,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446247,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS177,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446255,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS573,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-1 RMC Plant,2446264,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai SI,18-Apr-24,1CH24ARS537,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446266,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS233,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446268,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS178,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446269,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS574,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-1 RMC Plant,2446280,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai SI,18-Apr-24,1CH24ARS538,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446282,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS575,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446285,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS179,2.43321E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446298,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS576,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446309,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS234,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-1 RMC Plant,2446310,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai SI,18-Apr-24,1CH24ARS539,2.4332E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446311,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS180,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446315,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS577,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446324,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS181,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446341,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS182,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446344,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS578,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446350,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS579,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446359,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS235,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446360,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS183,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446363,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS580,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446376,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS581,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446390,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS184,2.43321E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446396,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS236,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446399,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS582,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446405,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS185,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446425,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS583,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446432,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS237,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446436,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS186,2.43321E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446448,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS187,2.43321E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446453,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS584,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446459,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS188,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446471,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS189,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446472,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS585,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446476,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS238,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446482,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS586,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446496,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS190,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446499,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS587,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446509,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS588,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446514,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS191,2.43321E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446519,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS239,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446526,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS589,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446535,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS192,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-1 RMC Plant,2446537,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai SI,18-Apr-24,1CH24ARS544,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446539,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS590,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-1 RMC Plant,2446548,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai SI,18-Apr-24,1CH24ARS545,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446550,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS240,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446556,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS193,2.43321E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446562,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS592,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446573,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS194,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446577,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS593,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446583,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS241,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446585,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS195,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446590,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS594,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446614,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS196,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446615,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS595,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446623,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS596,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446629,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS242,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446632,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS597,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446635,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS197,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446656,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS598,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446672,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS599,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446673,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS198,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446678,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS243,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446687,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS600,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446695,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS601,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446708,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS602,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446723,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS603,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446727,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS244,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446734,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS604,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446762,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS199,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446776,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS605,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446783,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS245,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446785,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS606,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446788,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS200,2.43321E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446794,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS607,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446812,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS201,2.43321E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446816,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS608,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446823,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS609,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446833,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS202,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446842,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS610,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446843,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS246,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446861,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS203,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446920,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS247,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2446955,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS248,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446957,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS611,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446973,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS612,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2446993,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS204,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2446996,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS613,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447014,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS614,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447036,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS205,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447041,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS249,2.4332E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447043,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS615,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447062,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS616,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447068,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS617,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447079,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS618,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447083,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS250,2.4332E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447099,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS619,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447101,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS206,2.43321E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447120,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS620,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447125,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS621,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447145,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS622,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447164,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS623,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447179,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS624,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447185,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS251,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447213,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS207,2.43321E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447235,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS625,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447254,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS252,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447269,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS626,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447271,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS208,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447293,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS627,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447299,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS253,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447314,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS209,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447337,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS210,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447353,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS630,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447373,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS211,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447375,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS631,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447396,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS632,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447411,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS255,2.4332E+12,M40,9,"57,348.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447470,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS256,2.4332E+12,M40,7.5,"47,790.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447506,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS257,2.4332E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447517,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS634,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447524,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS213,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447558,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS635,2.4332E+12,M40 Grade of concrete,6,"38,232.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447588,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS259,2.4332E+12,M40,7.5,"47,790.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447592,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS214,2.43321E+12,M40,7,"44,604.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447649,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS260,2.4332E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447671,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS638,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447691,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS216,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-3 RMC Plant,2447713,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 3 SI,18-Apr-24,3CH24ARS262,2.4332E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447717,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS217,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447732,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS639,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-5 RMC Plant,2447737,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 5 BP2SI,18-Apr-24,5CH24BP2-165,2.4332E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447757,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS640,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-2 RMC Plant,2447814,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 2 SI,18-Apr-24,2CH24ARS641,2.4332E+12,M40 Grade of concrete,7,"44,604.00",0
+18-Apr-24,INV,Chennai-5 RMC Plant,2447837,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 5 BP1SI,18-Apr-24,5CH24BP1-429,2.4332E+12,M40,10,"63,720.00",0
+18-Apr-24,INV,Chennai-Pudupakkam,2447860,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai-Pudup SI,18-Apr-24,9CH24ARS218,2.43321E+12,M40,6,"38,232.00",0
+18-Apr-24,INV,Chennai-5 RMC Plant,2447872,"Academic Block - VIT Chennai,,VIT University,,CHENNAI,Tamil Nadu,IN,600127",Chennai 5 BP1SI,18-Apr-24,5CH24BP1-430,2.4332E+12,M40,6,"38,232.00",0
+27-May-24,REC,,505331/CHN/138847,,,,,,,,0,"94,68,792.00"
+24-Jun-24,REC,,845286/CHN/138847,,,,,,,,0,"91,37,448.00"
+,,Total of Debits and Credits,,,,,,,,,"1,87,27,308.00","1,86,12,612.00"
+,,Customer Closing Balance,,,,,,,,,"1,14,696.00",0

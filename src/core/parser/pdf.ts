@@ -37,6 +37,11 @@ export async function parsePdfFile(filePath: string, sourceSide: PdfSide = 'CUST
     compact.parserLog.unshift(...parserLog);
     return compact;
   }
+  const tally = parseTallyPdfLedger(lines, sourceFile, sourceSide);
+  if (tally.transactions.length || tally.balances.opening || tally.balances.closing) {
+    tally.parserLog.unshift(...parserLog);
+    return tally;
+  }
   const chunks = chunkVerticalLedger(lines);
   const transactions: NormalizedTxn[] = [];
   const balances: ParseResult['balances'] = { openingRows: [], closingRows: [] };
@@ -120,6 +125,131 @@ function parseCompactPdfLedger(lines: string[], sourceFile: string, sourceSide: 
     return { transactions, balances, parserLog };
   }
   return { transactions: [], balances, parserLog };
+}
+
+function parseTallyPdfLedger(lines: string[], sourceFile: string, sourceSide: PdfSide): ParseResult {
+  const balances: ParseResult['balances'] = { openingRows: [], closingRows: [] };
+  const parserLog: ParseResult['parserLog'] = [];
+  if (!lines.some(line => /ParticularsCreditDebit|Vch No\.Vch Type/i.test(line))) return { transactions: [], balances, parserLog };
+  const transactions = parseTallyPdfRows(lines, sourceFile, sourceSide, balances);
+  parserLog.push({ sourceFile, level: 'info', message: `Parsed ${transactions.length} Tally PDF ledger rows`, confidence: transactions.length ? 82 : 45 });
+  return { transactions, balances, parserLog };
+}
+
+function isTallyDate(line: string) {
+  return /^\d{1,2}-[A-Za-z]{3}-\d{2,4}$/.test(line);
+}
+
+function isMoneyLine(line: string) {
+  return /^\d{1,3}(?:,\d{2,3})*(?:\.\d{2})$/.test(line);
+}
+
+function isTotalLine(line: string) {
+  return /^\d{1,3}(?:,\d{2,3})*(?:\.\d{2})\d{1,3}(?:,\d{2,3})*(?:\.\d{2})$/.test(line);
+}
+
+function tallyVoucherType(vchType: string, particulars: string, amountSign: 'DR' | 'CR', refs: string[]): VoucherType {
+  const text = `${vchType} ${particulars}`.toLowerCase();
+  if (/payment|receipt|bank|control|ho - payment/.test(text)) return 'PAYMENT';
+  if (/tds|194q|194c|tax deducted/.test(text)) return /journal|jv/i.test(vchType) ? 'JOURNAL_TDS' : 'TDS';
+  if (/journal|\bjv\b/i.test(vchType)) {
+    if (/debit note|d no|arcm/.test(text)) return amountSign === 'DR' ? 'CREDIT_NOTE' : 'DEBIT_NOTE';
+    if (/credit note|invoice cancelled|\bcn\b|armn/.test(text)) return 'CREDIT_NOTE';
+    if (refs.length) return 'JOURNAL_INVOICE';
+    return 'JOURNAL_ADJUSTMENT';
+  }
+  if (/purchase|bill booked|invoice/.test(text) || refs.length) return 'INVOICE';
+  if (/debit note|arcm/.test(text)) return 'DEBIT_NOTE';
+  if (/credit note|armn|\bcn\b/.test(text)) return 'CREDIT_NOTE';
+  return 'OTHER';
+}
+
+function balanceTxn(sourceFile: string, sourceRow: number, sourceSide: PdfSide, date: string | undefined, voucherType: 'OPENING' | 'CLOSING', amountSign: 'DR' | 'CR', amount: number, line: string): NormalizedTxn {
+  const debit = amountSign === 'DR' ? amount : 0;
+  const credit = amountSign === 'CR' ? amount : 0;
+  return makePdfTxn({ sourceSide, sourceFile, sourceRow, date, voucherType, particulars: line, narration: line, debit, credit, signedAmountRdcView: signedFromDebitCredit(sourceSide, debit, credit), amountOriginalSign: amountSign === 'DR' ? 'Dr' : 'Cr', parseConfidence: 82, parserNotes: ['Tally PDF balance row'] });
+}
+
+function parseTallyPdfRows(lines: string[], sourceFile: string, sourceSide: PdfSide, balances: ParseResult['balances']) {
+  const transactions: NormalizedTxn[] = [];
+  let currentDate: string | undefined;
+  for (let i = 0; i < lines.length; i++) {
+    const dateWithSign = lines[i].match(/^(\d{1,2}-[A-Za-z]{3}-\d{2,4})(Dr|Cr)$/i);
+    let signIndex = i;
+    if (dateWithSign) {
+      currentDate = parseDate(dateWithSign[1]);
+      const gluedBalance = (lines[i + 1] || '').match(/^(Opening Balance|Closing Balance)(\d{1,3}(?:,\d{2,3})*(?:\.\d{2}))$/i);
+      if (gluedBalance) {
+        const voucherType = /opening/i.test(gluedBalance[1]) ? 'OPENING' : 'CLOSING';
+        const amount = moneyValue(gluedBalance[2]);
+        const amountSign = dateWithSign[2].toUpperCase() as 'DR' | 'CR';
+        const txn = balanceTxn(sourceFile, i + 1, sourceSide, currentDate, voucherType, amountSign, amount, `${gluedBalance[1]} | ${gluedBalance[2]}`);
+        if (voucherType === 'OPENING') {
+          if (balances.opening == null) balances.opening = txn.signedAmountRdcView;
+          balances.openingRows?.push(txn);
+        } else {
+          balances.closing = txn.signedAmountRdcView;
+          balances.closingRows?.push(txn);
+        }
+        i += 1;
+        continue;
+      }
+    } else if (isTallyDate(lines[i])) {
+      currentDate = parseDate(lines[i]);
+      continue;
+    }
+    if (!dateWithSign && !/^(Dr|Cr)$/i.test(lines[i])) continue;
+    const amountSign = (dateWithSign ? dateWithSign[2] : lines[signIndex]).toUpperCase() as 'DR' | 'CR';
+    const particulars = lines[signIndex + 1] || '';
+    const amountLine = lines[signIndex + 2] || '';
+    if (!isMoneyLine(amountLine)) continue;
+    const amount = moneyValue(amountLine);
+    const voucherNo = lines[signIndex + 3] && !/^(Dr|Cr)$/i.test(lines[signIndex + 3]) && !isTallyDate(lines[signIndex + 3]) ? lines[signIndex + 3] : '';
+    const vchType = lines[signIndex + 4] && !/^(Dr|Cr)$/i.test(lines[signIndex + 4]) && !isTallyDate(lines[signIndex + 4]) && !isTotalLine(lines[signIndex + 4]) ? lines[signIndex + 4] : '';
+    const text = [particulars, voucherNo, vchType].join(' | ');
+
+    if (/opening balance/i.test(particulars)) {
+      const txn = balanceTxn(sourceFile, i + 1, sourceSide, currentDate, 'OPENING', amountSign, amount, text);
+      if (balances.opening == null) balances.opening = txn.signedAmountRdcView; balances.openingRows?.push(txn);
+      i += 2;
+      continue;
+    }
+    if (/closing balance/i.test(particulars)) {
+      const txn = balanceTxn(sourceFile, i + 1, sourceSide, currentDate, 'CLOSING', amountSign, amount, text);
+      balances.closing = txn.signedAmountRdcView; balances.closingRows?.push(txn);
+      i += 2;
+      continue;
+    }
+
+    const refs = extractReferences([text]);
+    const referenceNo = refs[0] || (/^[A-Z0-9/-]{5,}$/i.test(voucherNo) ? voucherNo : '');
+    const debit = amountSign === 'DR' ? amount : 0;
+    const credit = amountSign === 'CR' ? amount : 0;
+    const voucherType = tallyVoucherType(vchType, particulars, amountSign, refs);
+    transactions.push(makePdfTxn({
+      sourceSide,
+      sourceFile,
+      sourceRow: i + 1,
+      date: currentDate,
+      voucherType,
+      voucherNo,
+      referenceNo,
+      normalizedReferenceNo: normalizeReference(referenceNo),
+      extractedReferences: refs,
+      chequeNo: extractChequeNo([text]),
+      allocationType: 'Inferred',
+      particulars,
+      narration: text,
+      debit,
+      credit,
+      signedAmountRdcView: signedFromDebitCredit(sourceSide, debit, credit),
+      amountOriginalSign: amountSign === 'DR' ? 'Dr' : 'Cr',
+      parseConfidence: refs.length || /payment/i.test(text) ? 84 : 76,
+      parserNotes: ['Tally PDF ledger row'],
+    }));
+    i += vchType ? 4 : 2;
+  }
+  return transactions;
 }
 
 function moneyValue(value?: string) {

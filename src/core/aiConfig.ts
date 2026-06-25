@@ -5,6 +5,8 @@ export type AiConfig = {
   model: string;
   confidenceThreshold: number;
   maxRows: number;
+  concurrency: number;
+  requestTimeoutMs: number;
 };
 
 export function getAiConfig(): AiConfig {
@@ -13,6 +15,8 @@ export function getAiConfig(): AiConfig {
     model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
     confidenceThreshold: Number(process.env.AI_CONFIDENCE_THRESHOLD || 0.75),
     maxRows: Number(process.env.AI_MAX_ROWS || 80),
+    concurrency: Math.max(1, Number(process.env.AI_CONCURRENCY || 4)),
+    requestTimeoutMs: Math.max(5000, Number(process.env.AI_REQUEST_TIMEOUT_MS || 25000)),
   };
 }
 

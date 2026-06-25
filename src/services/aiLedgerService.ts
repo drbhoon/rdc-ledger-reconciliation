@@ -51,7 +51,7 @@ async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, c
   try {
     const openai = await client(config);
     if (!openai) return undefined;
-    const response = await openai.responses.create({
+    const response = await withTimeout(openai.responses.create({
       model: config.model,
       instructions: [
         'You are an expert Indian accounting ledger reconciliation assistant for RDC customer/vendor ledger reconciliation.',
@@ -68,12 +68,39 @@ async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, c
           schema,
         },
       },
-    });
+    }), config.requestTimeoutMs, name);
     return JSON.parse(response.output_text) as T;
   } catch (error) {
     console.error(`[ai] ${name} failed; continuing deterministic reconciliation`, error);
     return undefined;
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function mapLimit<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
+  let index = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const item = items[index++];
+      await worker(item);
+    }
+  });
+  await Promise.all(workers);
 }
 
 const referencesSchema: JsonSchema = {
@@ -211,7 +238,7 @@ export async function aiEnhanceParseResult(parseResult: ParseResult, sourceSide:
   const candidates = parseResult.transactions
     .filter((txn) => txn.parseConfidence < 85 || !txn.normalizedReferenceNo || txn.voucherType.startsWith('JOURNAL'))
     .slice(0, config.maxRows);
-  for (const txn of candidates) {
+  await mapLimit(candidates, config.concurrency, async (txn) => {
     usage.rowsReviewed += 1;
     const context = { sourceSide, signConvention: 'customer credit to RDC is positive; customer debit to RDC is negative' };
     if (!txn.normalizedReferenceNo || txn.parseConfidence < 85) {
@@ -245,7 +272,7 @@ export async function aiEnhanceParseResult(parseResult: ParseResult, sourceSide:
         }
       }
     }
-  }
+  });
   parseResult.parserLog.push({ sourceFile: 'AI', level: 'info', message: `AI reviewed ${usage.rowsReviewed} rows; extracted ${usage.referencesExtracted} references; classified ${usage.journalRowsClassified} journals`, confidence: 100 });
   return usage;
 }

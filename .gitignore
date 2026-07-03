@@ -13,3 +13,6 @@ Test Files
 dev-server.log
 dev-server.err.log
 tsconfig.tsbuildinfo
+
+# Real customer ledgers for the local regression harness - never commit
+test-data/

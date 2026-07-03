@@ -27,15 +27,68 @@ function classify(voucherTypeText: string, chunkText: string, debit: number, cre
 
 type PdfSide = 'RDC' | 'CUSTOMER';
 
+/**
+ * Geometry-aware text extraction: rebuilds each line from pdf.js text items
+ * sorted by (y, x), inserting a space whenever there is a horizontal gap
+ * between items. This prevents adjacent table columns (e.g. Qty and Amount)
+ * from fusing into one token — the root cause of amounts like 4,501.70 being
+ * read as 14,501.70.
+ */
+async function extractSpacedText(buffer: Buffer): Promise<string> {
+  const render = (pageData: any) =>
+    pageData.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false }).then((tc: any) => {
+      type Item = { str: string; x: number; y: number; w: number };
+      const items: Item[] = tc.items
+        .filter((it: any) => it.str && it.str.trim() !== '')
+        .map((it: any) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width || 0 }));
+      // group items into lines by y (2pt tolerance)
+      const lines: Item[][] = [];
+      for (const it of items.sort((a, b) => b.y - a.y || a.x - b.x)) {
+        const line = lines.find(l => Math.abs(l[0].y - it.y) <= 2);
+        if (line) line.push(it); else lines.push([it]);
+      }
+      return lines
+        .map(line => {
+          line.sort((a, b) => a.x - b.x);
+          let out = '';
+          let cursor = -1;
+          for (const it of line) {
+            if (cursor >= 0 && it.x - cursor > 0.5) out += ' ';
+            out += it.str;
+            cursor = it.x + it.w;
+          }
+          return out.trim();
+        })
+        .filter(Boolean)
+        .join('\n');
+    });
+  const data = await pdf(buffer, { pagerender: render } as any);
+  return String(data.text || '');
+}
+
 export async function parsePdfFile(filePath: string, sourceSide: PdfSide = 'CUSTOMER'): Promise<ParseResult> {
   const sourceFile = filePath.split(/[\\/]/).pop() || filePath;
-  const data = await pdf(fs.readFileSync(filePath));
+  const buffer = fs.readFileSync(filePath);
+  const data = await pdf(buffer);
   const parserLog: ParseResult['parserLog'] = [{ sourceFile, level: 'info', message: 'PDF text extraction completed', confidence: data.text.trim() ? 80 : 20 }];
   const lines = String(data.text || '').split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
-  const compact = parseCompactPdfLedger(lines, sourceFile, sourceSide);
+  // Column-safe text used by the structured (compact / FIN002) parsers.
+  let spacedLines: string[] = [];
+  try {
+    spacedLines = (await extractSpacedText(buffer)).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  } catch {
+    spacedLines = lines;
+    parserLog.push({ sourceFile, level: 'warn', message: 'Geometry-aware extraction failed; falling back to plain text', confidence: 50 });
+  }
+  const compact = parseCompactPdfLedger(spacedLines.length ? spacedLines : lines, sourceFile, sourceSide);
   if (compact.transactions.length || compact.balances.opening || compact.balances.closing) {
     compact.parserLog.unshift(...parserLog);
     return compact;
+  }
+  const fin002 = parseFin002PdfLedger(spacedLines.length ? spacedLines : lines, sourceFile, sourceSide);
+  if (fin002.transactions.length) {
+    fin002.parserLog.unshift(...parserLog);
+    return fin002;
   }
   const tally = parseTallyPdfLedger(lines, sourceFile, sourceSide);
   if (tally.transactions.length || tally.balances.opening || tally.balances.closing) {
@@ -293,44 +346,173 @@ function compactCustomerRefs(line: string) {
   return Array.from(refs);
 }
 
+const MONEY_TOKEN = /^-?\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?$|^-?\d+(?:\.\d{1,2})?$/;
+
+/**
+ * Read Debit/Credit for a compact-RDC row from whitespace tokens at the line
+ * end. Layout per row tail: `<qty> <debit> <credit>` — e.g. INV: `1 4,501.70 0`,
+ * REC: `0 20,51,451.00`, CM: `-6 0 33,276.00`. Never regex-fuses columns.
+ */
+function rdcAmountFromTokens(line: string, docType: string): { debit: number; credit: number } | undefined {
+  const tokens = line.trim().split(/\s+/);
+  // Collect trailing money-like tokens (stop at first non-money looking back)
+  const tail: string[] = [];
+  for (let i = tokens.length - 1; i >= 0 && tail.length < 3; i--) {
+    if (MONEY_TOKEN.test(tokens[i])) tail.unshift(tokens[i]);
+    else break;
+  }
+  if (tail.length < 2) return undefined;
+  const vals = tail.map(t => parseAmount(t));
+  // Last two tokens are always [debit, credit]; a token before them is qty.
+  const credit = Math.abs(vals[vals.length - 1]);
+  const debit = Math.abs(vals[vals.length - 2]);
+  if (!debit && !credit) return undefined;
+  // Sanity: a REC/CM/CN row carries a credit; INV/DN/TDS carries a debit.
+  const creditDoc = ['REC', 'CM', 'CN'].includes(docType);
+  if (creditDoc && !credit) return undefined;
+  if (!creditDoc && !debit) return undefined;
+  return { debit: creditDoc ? 0 : debit, credit: creditDoc ? credit : 0 };
+}
+
 function parseCompactRdcPdf(lines: string[], sourceFile: string, balances: ParseResult['balances']) {
   const transactions: NormalizedTxn[] = [];
+  const parserNotes: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const opening = line.match(/Customer Opening Balance\s*([\d,]+(?:\.\d+)?)/i);
+    const opening = line.match(/Customer Opening Balance\s*(-?[\d,]+(?:\.\d+)?)/i);
     if (opening) {
       const amount = moneyValue(opening[1]);
       const txn = makePdfTxn({ sourceSide: 'RDC', sourceFile, sourceRow: i + 1, voucherType: 'OPENING', particulars: line, narration: line, debit: amount, credit: 0, signedAmountRdcView: amount, parseConfidence: 80, parserNotes: ['RDC compact PDF opening balance'] });
       balances.opening = txn.signedAmountRdcView; balances.openingRows?.push(txn);
       continue;
     }
-    const closing = line.match(/Customer Closing Balance\s*([\d,]+(?:\.\d+)?)/i);
+    const closing = line.match(/Customer Closing Balance\s*(-?[\d,]+(?:\.\d+)?)/i);
     if (closing) {
       const amount = moneyValue(closing[1]);
       const txn = makePdfTxn({ sourceSide: 'RDC', sourceFile, sourceRow: i + 1, voucherType: 'CLOSING', particulars: line, narration: line, debit: amount, credit: 0, signedAmountRdcView: amount, parseConfidence: 80, parserNotes: ['RDC compact PDF closing balance'] });
       balances.closing = txn.signedAmountRdcView; balances.closingRows?.push(txn);
       continue;
     }
-    const row = line.match(/^(\d{2}-[A-Za-z]{3}-\d{2})(INV|REC|TDS|DN|CN)(.+)$/i);
+    // Doc types include CM (credit memo) and DM (debit memo) — previously
+    // missing, which silently dropped credit memos like 2SR25ARCM42.
+    const row = line.match(/^(\d{2}-[A-Za-z]{3}-\d{2})\s*(INV|REC|TDS|DN|CN|CM|DM)\b(.+)$/i);
     if (!row) continue;
     const [, dateText, docTypeRaw, rest] = row;
     const docType = docTypeRaw.toUpperCase();
-    const refs = compactRdcRefs(line).concat(extractReferences([line])).filter((ref, index, arr) => arr.indexOf(ref) === index);
+    const refs = compactRdcRefs(line.replace(/\s+/g, '')).concat(compactRdcRefs(line)).concat(extractReferences([line])).filter((ref, index, arr) => arr.indexOf(ref) === index);
     const referenceNo = refs[0] || '';
-    const voucherNo = docType === 'REC' ? rest.match(/^([A-Z0-9/-]+)/i)?.[1] || '' : rest.match(/^.*?(\d{6,})/)?.[1] || '';
-    const { debit, credit } = rdcAmountAtEnd(line, docType);
-    if (!debit && !credit) continue;
-    const voucherType: VoucherType = docType === 'REC' ? 'RECEIPT' : docType === 'DN' ? 'DEBIT_NOTE' : docType === 'CN' ? 'CREDIT_NOTE' : docType === 'TDS' ? 'TDS' : 'INVOICE';
+    const voucherNo = docType === 'REC' ? rest.trim().match(/^([A-Z0-9/-]+)/i)?.[1] || '' : rest.match(/^.*?(\d{6,})/)?.[1] || '';
+    const amounts = rdcAmountFromTokens(line, docType) || rdcAmountAtEnd(line.replace(/\s+/g, ''), docType);
+    const { debit, credit } = amounts || { debit: 0, credit: 0 };
+    if (!debit && !credit) {
+      parserNotes.push(`Row ${i + 1}: could not read amount (${docType} ${referenceNo || voucherNo || '?'})`);
+      continue;
+    }
+    const voucherType: VoucherType = docType === 'REC' ? 'RECEIPT'
+      : docType === 'DN' || docType === 'DM' ? 'DEBIT_NOTE'
+      : docType === 'CN' || docType === 'CM' ? 'CREDIT_NOTE'
+      : docType === 'TDS' ? 'TDS' : 'INVOICE';
     transactions.push(makePdfTxn({ sourceSide: 'RDC', sourceFile, sourceRow: i + 1, date: parseDate(dateText), voucherType, voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo), extractedReferences: refs, chequeNo: extractChequeNo([line]), particulars: docType, narration: line, debit, credit, signedAmountRdcView: signedFromDebitCredit('RDC', debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: refs.length || docType === 'REC' ? 82 : 70, parserNotes: ['RDC compact PDF row'] }));
   }
   return transactions;
+}
+
+/**
+ * FIN002-style project ledger (e.g. Malnad): header
+ * `Vchr Date Vchr No Project Code Particulars Inv. No Inv. Date Chq. No Debit Credit Balance ...`
+ * Rows start with dd/mm/yyyy. The running Balance column lets us derive each
+ * row's signed amount deterministically (balance delta), immune to
+ * debit/credit column ambiguity.
+ */
+function parseFin002PdfLedger(lines: string[], sourceFile: string, sourceSide: PdfSide): ParseResult {
+  const balances: ParseResult['balances'] = { openingRows: [], closingRows: [] };
+  const parserLog: ParseResult['parserLog'] = [];
+  const isFin002 = lines.some(l => /Vchr\s*Date\s*Vchr\s*No/i.test(l) && /Debit\s*Credit\s*Balance/i.test(l));
+  if (!isFin002) return { transactions: [], balances, parserLog };
+
+  // Each transaction row carries an explicit money trio: `debit credit balance [Dr|Cr]`,
+  // followed by the Opposite Ledger text. Parse the trio directly (deterministic),
+  // and fold following wrapped narration lines into the row for reference extraction.
+  const TRIO = /(\d[\d,]*\.\d{2})\s+(\d[\d,]*\.\d{2})\s+(\d[\d,]*\.\d{2})\s*(Dr|Cr)?/;
+  const isDateRow = (l: string) => /^\d{2}\/\d{2}\/\d{4}\s/.test(l);
+  const isHeaderish = (l: string) => /^(?:Vchr Date|Report Code|Account Name|Page \d|Malnad|FIN\d|Ledger Total|Grand Total|Total Closing|Ledger Closing)/i.test(l);
+
+  const transactions: NormalizedTxn[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const closingLine = line.match(/Ledger Closing Balance\s*:?\s*(\d[\d,]*\.\d{2})\s+(\d[\d,]*\.\d{2})/i);
+    if (closingLine) {
+      // customer books payable view: closing = credit − debit ≡ RDC receivable
+      balances.closing = moneyValue(closingLine[2]) - moneyValue(closingLine[1]);
+      continue;
+    }
+    const openMatch = line.match(/Opening Balance\s*:?\s*(\d[\d,]*\.\d{2})\s+(\d[\d,]*\.\d{2})/i);
+    if (openMatch) { balances.opening = moneyValue(openMatch[2]) - moneyValue(openMatch[1]); continue; }
+    if (!isDateRow(line)) continue;
+    const trio = line.match(TRIO);
+    if (!trio) continue;
+    const debitCustBooks = moneyValue(trio[1]);
+    const creditCustBooks = moneyValue(trio[2]);
+    if (!debitCustBooks && !creditCustBooks) continue;
+    const head = line.slice(0, trio.index || 0);
+    const row = head.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\S+)\s+(\S+)\s+(.*)$/);
+    const dateText = row?.[1] || line.slice(0, 10);
+    const vchrNo = row?.[2] || '';
+    const rest = row?.[4] || head;
+    // Fold wrapped continuation lines (until the next date row / header) into
+    // the narration so full invoice references split across lines are captured.
+    const continuation: string[] = [];
+    for (let j = i + 1; j < lines.length && continuation.length < 4; j++) {
+      if (isDateRow(lines[j]) || isHeaderish(lines[j])) break;
+      continuation.push(lines[j]);
+    }
+    const narration = [line, ...continuation].join(' | ');
+    const refs = extractReferences([rest, narration]);
+    const referenceNo = refs[0] || rest.match(/\b(\d{1,2}[A-Z]{2,4}\d{2}[A-Z]{0,4}\d{1,8})\b/i)?.[1]?.toUpperCase() || '';
+    const isPayment = /paid to vendor|payment|receipt|chq|cheque|neft|rtgs/i.test(rest) && !/purchase|bill booked|invoice/i.test(rest);
+    const isTds = /\btds\b|194q|194c/i.test(rest);
+    const voucherType: VoucherType = isTds ? 'TDS' : isPayment ? 'PAYMENT' : (refs.length || /vendor|purchase|bill|invoice/i.test(rest)) ? 'INVOICE' : 'OTHER';
+    // signedFromDebitCredit('CUSTOMER', d, c) = credit − debit — already the
+    // RDC-receivable view for this payable-format ledger.
+    transactions.push(makePdfTxn({
+      sourceSide, sourceFile, sourceRow: i + 1, date: parseDate(dateText), voucherType,
+      voucherNo: vchrNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo),
+      extractedReferences: refs, chequeNo: extractChequeNo([rest]), allocationType: 'Inferred',
+      particulars: rest.slice(0, 160), narration: narration.slice(0, 400),
+      debit: debitCustBooks, credit: creditCustBooks,
+      signedAmountRdcView: signedFromDebitCredit(sourceSide, debitCustBooks, creditCustBooks),
+      amountOriginalSign: debitCustBooks ? 'Dr' : 'Cr',
+      parseConfidence: refs.length ? 84 : 74,
+      parserNotes: ['FIN002 project ledger row'],
+    }));
+  }
+  parserLog.push({ sourceFile, level: 'info', message: `Parsed ${transactions.length} FIN002 project-ledger rows`, confidence: transactions.length ? 82 : 45 });
+  return { transactions, balances, parserLog };
+}
+
+/** Last two money tokens on a compact-customer row are [Debit, Credit]. */
+function customerAmountFromTokens(line: string): { debit: number; credit: number } | undefined {
+  const tokens = line.trim().split(/\s+/);
+  const tail: string[] = [];
+  for (let i = tokens.length - 1; i >= 0 && tail.length < 2; i--) {
+    if (MONEY_TOKEN.test(tokens[i])) tail.unshift(tokens[i]);
+    else break;
+  }
+  if (tail.length < 2) return undefined;
+  const debit = Math.abs(parseAmount(tail[0]));
+  const credit = Math.abs(parseAmount(tail[1]));
+  if (!debit && !credit) return undefined;
+  return { debit, credit };
 }
 
 function parseCompactCustomerPdf(lines: string[], sourceFile: string, balances: ParseResult['balances']) {
   const transactions: NormalizedTxn[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const balance = line.match(/^(\d{2}\/\d{2}\/\d{4})?Closing Balance0\s+([\d,]+(?:\.\d+)?)/i) || line.match(/^\d+\s+\S+\s+(\d{2}\/\d{2}\/\d{4})Opening0\s+([\d,]+(?:\.\d+)?)/i);
+    const balance = line.match(/^(\d{2}\/\d{2}\/\d{4})?\s*Closing Balance\s*0\s+([\d,]+(?:\.\d+)?)/i)
+      || line.match(/^\d+\s+\S+\s+(\d{2}\/\d{2}\/\d{4})\s*Opening\s*0\s+([\d,]+(?:\.\d+)?)/i)
+      || line.match(/^(\d{2}\/\d{2}\/\d{4})?Closing Balance0\s+([\d,]+(?:\.\d+)?)/i)
+      || line.match(/^\d+\s+\S+\s+(\d{2}\/\d{2}\/\d{4})Opening0\s+([\d,]+(?:\.\d+)?)/i);
     if (balance) {
       const amount = moneyValue(balance[2]);
       const isClosing = /Closing Balance/i.test(line);
@@ -343,9 +525,9 @@ function parseCompactCustomerPdf(lines: string[], sourceFile: string, balances: 
     if (!row) continue;
     const [, srNo, site, dateText, rest] = row;
     if (/Opening/i.test(rest)) continue;
-    const refs = compactCustomerRefs(line).concat(extractReferences([line])).filter((ref, index, arr) => arr.indexOf(ref) === index);
+    const refs = compactCustomerRefs(line.replace(/\s+/g, '')).concat(compactCustomerRefs(line)).concat(extractReferences([line])).filter((ref, index, arr) => arr.indexOf(ref) === index);
     const referenceNo = refs[0] || '';
-    const { debit, credit } = compactAmountAtEnd(line);
+    const { debit, credit } = customerAmountFromTokens(line) || compactAmountAtEnd(line.replace(/\s+/g, ''));
     if (!debit && !credit) continue;
     const isPayment = /payment/i.test(rest);
     const isTds = /tds|194q|194c|tax deducted/i.test(rest);

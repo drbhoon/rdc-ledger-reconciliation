@@ -19,9 +19,20 @@ export function extractReferences(fields: Array<string | undefined | null>) {
   const found = new Set<string>();
   for (const pattern of DIRECT_PATTERNS) for (const match of text.matchAll(pattern)) found.add(match[0].toUpperCase());
   for (const match of text.matchAll(KEYWORD_PATTERN)) {
-    const candidate = (match[1] || '').split(/[|,;]/)[0].trim();
+    let candidate = (match[1] || '').split(/[|,;]/)[0].trim();
     for (const pattern of DIRECT_PATTERNS) for (const direct of candidate.matchAll(pattern)) found.add(direct[0].toUpperCase());
-    if (!found.size && /\d{1,2}[A-Z]{2,4}\d{2}/i.test(candidate)) found.add(candidate.toUpperCase().replace(/\s+/g, ''));
+    if (!found.size && /\d{1,2}[A-Z]{2,4}\d{2}/i.test(candidate)) {
+      // Trim any amount that fused onto the reference (e.g. "7MU6960 305369.00"
+      // or "7MU69603053690.00") — real references never carry decimals/commas.
+      candidate = candidate
+        .replace(/\s+\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?\s*(?:Dr|Cr)?$/i, '')
+        .replace(/\d{1,3}(?:,\d{2,3})+(?:\.\d{1,2})?$/, '')
+        .replace(/\.\d{1,2}$/, '')
+        .trim();
+      const clean = candidate.toUpperCase().replace(/\s+/g, '');
+      // Plausible reference: alphanumeric, no decimal point, sane length.
+      if (clean && clean.length >= 5 && clean.length <= 18 && !/[.,]/.test(clean)) found.add(clean);
+    }
   }
   return Array.from(found);
 }

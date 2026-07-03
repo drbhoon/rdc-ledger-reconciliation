@@ -123,6 +123,9 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
     const txn = buildTxn({ sourceSide: 'CUSTOMER', sourceFile, sourceSheet, sourceRow: row.__rowNum__, date: base.date, voucherType, voucherNo: base.voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo), extractedReferences: refs, parentVoucherNo: allocationType ? base.voucherNo : undefined, chequeNo: extractChequeNo([particulars, base.voucherNo]), allocationType, particulars, narration: particulars, debit, credit, signedAmountRdcView: signedFromDebitCredit('CUSTOMER', debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: confidence, parserNotes: notes });
     if (voucherType === 'OPENING') { balances.opening = txn.signedAmountRdcView; balances.openingRows?.push(txn); return; }
     if (voucherType === 'CLOSING') { balances.closing = txn.signedAmountRdcView; balances.closingRows?.push(txn); return; }
+    // Zero-amount rows (informational sub-allocations) contribute nothing and
+    // can wrongly consume a reference match — drop them.
+    if (!txn.debit && !txn.credit) return;
     out.push(txn);
   };
   for (const row of rows) {
@@ -159,12 +162,24 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
     }
     if (parentBase && /New Ref|Agst Ref/i.test(line)) {
       parentHadChildren = true;
-      const allocRef = String((row as any).__EMPTY_1 || '');
-      const allocAmount = absAmount((row as any)['Vch Type'] || (row as any).__EMPTY_2 || (row as any).__EMPTY_3);
-      const allocSign = String((row as any)['Vch No.'] || (row as any)['Vch No'] || '').toLowerCase();
-      const childDebit = debit || (allocSign === 'dr' ? allocAmount : 0);
-      const childCredit = credit || (allocSign === 'cr' ? allocAmount : 0);
-      const refLine = [String((row as any).__EMPTY || ''), allocRef, allocAmount ? String(allocAmount) : '', allocSign].filter(Boolean).join(' ');
+      // Generic Tally allocation-row scan: cell positions vary by export, so
+      // identify the reference, the Dr/Cr token and the amount by *shape*
+      // rather than hard-coded column keys (fixes amounts missing on
+      // Agst Ref rows, e.g. Talib).
+      const cells = Object.values(row).map(v => String(v ?? '').trim()).filter(Boolean);
+      const MONEY_CELL = /^-?\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?$/;
+      const allocRef = cells.find(c => /^[0-9]{1,2}[A-Z]{2,4}\d{2}[A-Z0-9/-]{3,}$/i.test(c))
+        || String((row as any).__EMPTY_1 || '');
+      const signCell = cells.find(c => /^(dr|cr)$/i.test(c));
+      const moneyCells = cells.filter(c => MONEY_CELL.test(c) && c !== allocRef);
+      const allocAmount = moneyCells.length ? absAmount(moneyCells[moneyCells.length - 1]) : absAmount((row as any)['Vch Type'] || (row as any).__EMPTY_2 || (row as any).__EMPTY_3);
+      const allocSign = (signCell || String((row as any)['Vch No.'] || (row as any)['Vch No'] || '')).toLowerCase();
+      // Fall back to the parent's side when the child row omits Dr/Cr.
+      const parentSide = parentBase.debit > 0 ? 'dr' : parentBase.credit > 0 ? 'cr' : '';
+      const side = allocSign === 'dr' || allocSign === 'cr' ? allocSign : parentSide;
+      const childDebit = debit || (side === 'dr' ? allocAmount : 0);
+      const childCredit = credit || (side === 'cr' ? allocAmount : 0);
+      const refLine = [String((row as any).__EMPTY || ''), allocRef, allocAmount ? String(allocAmount) : '', side].filter(Boolean).join(' ');
       addCustomerTxn(row, baseWithDetails() || parentBase, refLine, childDebit, childCredit, /New Ref/i.test(line) ? 'New Ref' : 'Agst Ref');
       continue;
     }

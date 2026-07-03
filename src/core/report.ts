@@ -23,9 +23,14 @@ export async function writeReport(result: ReconcileResult, filePath: string) {
   addSummary(wb, result.summaryLines, result.options.partyName);
   addRecoStatement(wb, result.summaryLines, result.options.partyName);
   addCards(wb, result.cards);
-  addSheet(wb, 'Matched_Invoices', result.matches.map(rowFromMatch));
-  addSheet(wb, 'Unmatched_RDC', result.unmatchedRdc.map(rowFromMatch));
-  addSheet(wb, 'Unmatched_Customer', result.unmatchedCustomer.map(rowFromMatch));
+  // Receipts/payments are reconciled separately from invoices (dedicated sheets).
+  const isPaymentRow = (m: MatchRow) => ['PAYMENT', 'RECEIPT'].includes(m.rdcTxn?.voucherType || '') || ['PAYMENT', 'RECEIPT'].includes(m.customerTxn?.voucherType || '');
+  addSheet(wb, 'Matched_Invoices', result.matches.filter(m => !isPaymentRow(m)).map(rowFromMatch));
+  addSheet(wb, 'Matched_Receipts', result.matches.filter(isPaymentRow).map(rowFromMatch));
+  addSheet(wb, 'Unmatched_RDC', result.unmatchedRdc.filter(m => !isPaymentRow(m)).map(rowFromMatch));
+  addSheet(wb, 'Unmatched_RDC_Receipts', result.unmatchedRdc.filter(isPaymentRow).map(rowFromMatch));
+  addSheet(wb, 'Unmatched_Customer', result.unmatchedCustomer.filter(m => !isPaymentRow(m)).map(rowFromMatch));
+  addSheet(wb, 'Unmatched_Customer_Receipts', result.unmatchedCustomer.filter(isPaymentRow).map(rowFromMatch));
   addSheet(wb, 'Outside_RDC_Period_Customer_Items', result.outsidePeriodCustomer.map(rowFromMatch));
   addSheet(wb, 'Payment_Compare', [...result.matches, ...result.unmatchedRdc, ...result.unmatchedCustomer].filter(m => ['PAYMENT','RECEIPT'].includes(m.rdcTxn?.voucherType || '') || ['PAYMENT','RECEIPT'].includes(m.customerTxn?.voucherType || '')).map(rowFromMatch));
   addSheet(wb, 'Net_Zero_Reversals', result.netZeroReversals.map(t => rowFromTxn(t, 'INFO', 'CUSTOMER_PAYMENT_REVERSAL_NET_ZERO')));

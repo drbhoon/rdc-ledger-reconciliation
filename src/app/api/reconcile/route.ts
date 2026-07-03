@@ -33,6 +33,21 @@ export async function POST(req: Request) {
     console.log(`[reconcile] ${runId} parsing`, { partyName, rdcFile: rdcFile.name, customerFile: customerFile.name });
     const rdc = await parseLedger(rdcPath, 'RDC');
     const customer = await parseLedger(customerPath, 'CUSTOMER');
+    // Never produce a blank/one-sided reconciliation: if either ledger could
+    // not be read, stop with an actionable error instead of a wrong report.
+    if (!rdc.transactions.length) {
+      return new NextResponse(
+        `Could not read any transactions from the RDC ledger "${rdcFile.name}". ` +
+        'The file layout is not recognised. Please upload the RDC debtors ledger as Excel, or contact support with this file.',
+        { status: 422 });
+    }
+    if (!customer.transactions.length) {
+      return new NextResponse(
+        `Could not read any transactions from the customer ledger "${customerFile.name}". ` +
+        'The file layout is not recognised (this often happens with unusual PDF report formats). ' +
+        'Please upload the customer ledger as Excel/CSV if possible, or contact support with this file.',
+        { status: 422 });
+    }
     const aiConfig = getAiConfig();
     const aiUsage = emptyAiUsage(aiConfig);
     const customerAiUsage = await aiEnhanceParseResult(customer, 'CUSTOMER', aiConfig);

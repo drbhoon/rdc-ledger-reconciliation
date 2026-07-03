@@ -39,7 +39,33 @@ export function applyCustomerNetZeroReversals(customer: ParseResult, tolerance =
   }
   return netZero;
 }
+/**
+ * Some customers print the RDC account in "receivable view" (invoices Dr) and
+ * others in "payable view" (invoices Cr). Detect orientation from the parsed
+ * invoices and normalise everything to the RDC-receivable view so signs are
+ * consistent (e.g. Synergia's credit-side purchases).
+ */
+function normalizeCustomerOrientation(customer: ParseResult): boolean {
+  const invoices = customer.transactions.filter(t => ['INVOICE', 'JOURNAL_INVOICE'].includes(t.voucherType));
+  if (!invoices.length) return false;
+  const invoiceSum = invoices.reduce((s, t) => s + t.signedAmountRdcView, 0);
+  if (invoiceSum >= 0) return false;
+  for (const t of customer.transactions) t.signedAmountRdcView = -t.signedAmountRdcView;
+  if (customer.balances.opening != null) customer.balances.opening = -customer.balances.opening;
+  if (customer.balances.closing != null) customer.balances.closing = -customer.balances.closing;
+  customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'info', message: 'Customer ledger printed in receivable view; signs normalized to RDC view', confidence: 90 });
+  return true;
+}
+
+/** opening + Σ(signed txns) − closing; ≈0 when parsing captured every row correctly. */
+function ledgerIntegrityGap(side: ParseResult): number | undefined {
+  if (side.balances.closing == null) return undefined;
+  const total = side.transactions.reduce((s, t) => s + t.signedAmountRdcView, side.balances.opening || 0);
+  return total - side.balances.closing;
+}
+
 export function reconcile(rdc: ParseResult, customer: ParseResult, options: ReconcileOptions): ReconcileResult {
+  normalizeCustomerOrientation(customer);
   const netZeroReversals = applyCustomerNetZeroReversals(customer, options.paymentTolerance);
   const activeCustomer = customer.transactions.filter(t => !t.isNetZeroReversal);
   const outsidePeriodCustomerTxns = activeCustomer.filter(t => isOutsidePeriod(t.date, options.periodStart, options.periodEnd));
@@ -53,19 +79,31 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     const rref = refKey(rdcTxn);
     const amount = absSigned(rdcTxn);
     let best: { txn: NormalizedTxn; confidence: number; reason?: string } | undefined;
+    let refBest: { txn: NormalizedTxn; confidence: number; reason?: string } | undefined;
     for (const c of candidates) {
       if (usedCust.has(c.id) || !types.includes(c.voucherType)) continue;
       const cref = refKey(c);
-      const sameRef = !!(rref && cref && rref === cref);
+      const crefs = c.extractedReferences || [];
+      const rrefs = rdcTxn.extractedReferences || [];
+      const sameRef = !!(rref && cref && rref === cref) || !!(rref && crefs.includes(rref)) || !!(cref && rrefs.includes(cref));
       const amountOk = within(amount, absSigned(c), amountTolerance);
       const dateOk = daysBetween(rdcTxn.date, c.date) <= dateTolerance;
-      if (sameRef && amountOk) return { txn: c, confidence: 100, reason: c.extractedReferences?.includes(c.referenceNo || '') ? 'Reference found in narration' : 'Reference matched' };
-      if (amountOk && dateOk) best = { txn: c, confidence: 72, reason: 'Amount and date near; review required' };
+      if (sameRef && amountOk) return { txn: c, confidence: 100, reason: 'Reference matched' };
+      // Reference-first: a matching reference IS a match even when amounts
+      // differ (the difference is reported), instead of dumping the pair into
+      // both Unmatched sheets. This is what a manual VLOOKUP does.
+      if (sameRef && !refBest) refBest = { txn: c, confidence: 88, reason: `Reference matched; amount differs by ${(amount - absSigned(c)).toFixed(2)} — verify amount` };
+      if (amountOk && dateOk && !best) best = { txn: c, confidence: 72, reason: 'Amount and date near; review required' };
     }
-    return best;
+    return refBest || best;
   };
   for (const r of rdcInPeriod) {
-    const types = invoiceTypes.includes(r.voucherType) ? invoiceTypes : tdsTypes.includes(r.voucherType) ? tdsTypes : paymentTypes.includes(r.voucherType) ? paymentTypes : creditTypes.includes(r.voucherType) ? creditTypes : [];
+    // Credit notes are often booked by customers as (negative) purchases or
+    // journals, so let invoice-side matching span both buckets.
+    const types = invoiceTypes.includes(r.voucherType) ? [...invoiceTypes, ...creditTypes]
+      : tdsTypes.includes(r.voucherType) ? tdsTypes
+      : paymentTypes.includes(r.voucherType) ? paymentTypes
+      : creditTypes.includes(r.voucherType) ? [...creditTypes, ...invoiceTypes] : [];
     if (!types.length) continue;
     const found = tryMatch(r, customerInPeriod, types, paymentTypes.includes(r.voucherType) ? options.paymentDateToleranceDays : options.invoiceDateToleranceDays, paymentTypes.includes(r.voucherType) ? options.paymentTolerance : options.invoiceTolerance);
     if (found && found.confidence >= 75) {
@@ -81,8 +119,12 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   const openingClosing = openingClosingRows(rdc, customer);
   const tdsCompare = [...matches, ...unmatchedRdc, ...unmatchedCustomer].filter(m => [m.rdcTxn?.voucherType, m.customerTxn?.voucherType].some(v => v && tdsTypes.includes(v)));
   const journalEntries = customer.transactions.filter(t => t.voucherType.startsWith('JOURNAL') || t.parserNotes?.includes('SOURCE_VOUCHER_TYPE_JOURNAL'));
-  const summaryLines = buildSummary(rdc, customer, [...unmatchedRdc, ...unmatchedCustomer, ...outsidePeriodCustomer], netZeroReversals, options);
-  const cards = { matchedCount: matches.length, possibleCount: possibleMatches.length, unmatchedRdcCount: unmatchedRdc.length, unmatchedCustomerCount: unmatchedCustomer.length, outsidePeriodCustomerCount: outsidePeriodCustomer.length, netZeroReversalCount: netZeroReversals.length, journalEntriesConsidered: journalEntries.length, tdsExceptionCount: tdsCompare.filter(t => t.matchStatus !== 'MATCHED').length, unexplainedDifference: summaryLines.at(-1)?.amount || 0 };
+  const summaryLines = buildSummary(rdc, customer, [...unmatchedRdc, ...unmatchedCustomer, ...outsidePeriodCustomer], netZeroReversals, options, matches);
+  const rdcGap = ledgerIntegrityGap(rdc);
+  const custGap = ledgerIntegrityGap(customer);
+  const cards = { matchedCount: matches.length, possibleCount: possibleMatches.length, unmatchedRdcCount: unmatchedRdc.length, unmatchedCustomerCount: unmatchedCustomer.length, outsidePeriodCustomerCount: outsidePeriodCustomer.length, netZeroReversalCount: netZeroReversals.length, journalEntriesConsidered: journalEntries.length, tdsExceptionCount: tdsCompare.filter(t => t.matchStatus !== 'MATCHED').length, unexplainedDifference: summaryLines.at(-1)?.amount || 0, rdcLedgerIntegrityGap: Math.round((rdcGap || 0) * 100) / 100, customerLedgerIntegrityGap: Math.round((custGap || 0) * 100) / 100 };
+  if (rdcGap != null && Math.abs(rdcGap) > 1) rdc.parserLog.push({ sourceFile: rdc.transactions[0]?.sourceFile || 'rdc', level: 'error', message: `RDC ledger integrity check FAILED: parsed rows differ from stated closing balance by ${rdcGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });
+  if (custGap != null && Math.abs(custGap) > 1) customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'error', message: `Customer ledger integrity check FAILED: parsed rows differ from stated closing balance by ${custGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });
   return { options, rdc, customer: { ...customer, transactions: activeCustomer }, matches, possibleMatches, unmatchedRdc, unmatchedCustomer, outsidePeriodCustomer, netZeroReversals, tdsCompare, journalEntries, openingClosing, summaryLines, parserLog: [...rdc.parserLog, ...customer.parserLog], cards };
 }
 function reasonForRdc(t: NormalizedTxn): ReasonCode {
@@ -107,7 +149,7 @@ function openingClosingRows(rdc: ParseResult, customer: ParseResult) {
   if (Math.abs(closingDiff) > 1) rows.push(matchRow({ reasonCode: 'CLOSING_BALANCE_MISMATCH', rdcAmount: rdc.balances.closing, customerAmount: customer.balances.closing, difference: closingDiff, confidence: 100, remarks: 'Closing balances stored separately' }));
   return rows;
 }
-function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: MatchRow[], netZero: NormalizedTxn[], options: ReconcileOptions): SummaryLine[] {
+function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: MatchRow[], netZero: NormalizedTxn[], options: ReconcileOptions, matches: MatchRow[] = []): SummaryLine[] {
   const rdcBal = rdc.balances.closing ?? rdc.transactions.reduce((s,t)=>s+t.signedAmountRdcView, rdc.balances.opening || 0);
   const custBal = customer.balances.closing ?? customer.transactions.filter(t=>!t.isNetZeroReversal).reduce((s,t)=>s+t.signedAmountRdcView, customer.balances.opening || 0);
   const lines: SummaryLine[] = [
@@ -115,6 +157,16 @@ function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: Match
     { sign: '', particular: 'Balance As per ' + options.partyName, amount: custBal },
     { sign: '', particular: 'Difference', amount: rdcBal - custBal, remarks: 'RDC receivable - Customer receivable-view balance' },
   ];
+  // Opening balance difference is a standard reconciling line.
+  const openingDiff = (rdc.balances.opening ?? 0) - (customer.balances.opening ?? 0);
+  if (Math.abs(openingDiff) > 1 && (rdc.balances.opening != null || customer.balances.opening != null)) {
+    lines.push({ sign: openingDiff >= 0 ? 'Add' : 'Less', particular: 'Opening balance difference', amount: Math.abs(openingDiff), remarks: 'RDC opening minus customer opening (RDC view)', reasonCode: 'OPENING_BALANCE_MISMATCH' });
+  }
+  // Amount variances on reference-matched items (e.g. TDS/rounding/short booking).
+  const matchedVariance = matches.reduce((s, m) => s + (m.difference || 0), 0);
+  if (Math.abs(matchedVariance) > 1) {
+    lines.push({ sign: matchedVariance >= 0 ? 'Add' : 'Less', particular: 'Amount differences on reference-matched invoices/receipts', amount: Math.abs(matchedVariance), remarks: 'Same reference on both sides but amounts differ; see Matched_Invoices Difference column', reasonCode: 'AMOUNT_MISMATCH' });
+  }
   const grouped = new Map<string, MatchRow[]>();
   for (const e of exceptions) grouped.set(e.reasonCode || 'LOW_PARSE_CONFIDENCE', [...(grouped.get(e.reasonCode || 'LOW_PARSE_CONFIDENCE') || []), e]);
   for (const [reason, rows] of grouped) {
@@ -122,6 +174,11 @@ function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: Match
     if (Math.abs(amount) <= 1) continue;
     lines.push({ sign: amount >= 0 ? 'Add' : 'Less', particular: particularFor(reason as ReasonCode), amount: Math.abs(amount), remarks: remarkFor(reason as ReasonCode), reasonCode: reason as ReasonCode });
   }
+  // Surface parser integrity gaps so an unexplained difference is attributable.
+  const rdcGap = ledgerIntegrityGap(rdc);
+  if (rdcGap != null && Math.abs(rdcGap) > 1) lines.push({ sign: rdcGap >= 0 ? 'Less' : 'Add', particular: '⚠ RDC ledger rows not fully captured by parser (integrity gap)', amount: Math.abs(rdcGap), remarks: 'Parsed RDC rows do not tie to the stated closing balance — treat this reconciliation as INCOMPLETE' });
+  const custGap = ledgerIntegrityGap(customer);
+  if (custGap != null && Math.abs(custGap) > 1) lines.push({ sign: custGap >= 0 ? 'Add' : 'Less', particular: '⚠ Customer ledger rows not fully captured by parser (integrity gap)', amount: Math.abs(custGap), remarks: 'Parsed customer rows do not tie to the stated closing balance — treat this reconciliation as INCOMPLETE' });
   if (netZero.length) lines.push({ sign: '', particular: 'Customer payment reversal / debit-credit netted to zero', amount: 0, remarks: 'Customer reversal netted to zero', reasonCode: 'CUSTOMER_PAYMENT_REVERSAL_NET_ZERO' });
   const explained = lines.slice(3).reduce((s,l)=>s+(l.sign === 'Add' ? l.amount : l.sign === 'Less' ? -l.amount : 0),0);
   lines.push({ sign: '', particular: 'Unexplained Difference', amount: (rdcBal - custBal) - explained, remarks: 'After grouped Add/Less reconciling lines' });

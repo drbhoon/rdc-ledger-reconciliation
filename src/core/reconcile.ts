@@ -49,12 +49,50 @@ function normalizeCustomerOrientation(customer: ParseResult): boolean {
   const invoices = customer.transactions.filter(t => ['INVOICE', 'JOURNAL_INVOICE'].includes(t.voucherType));
   if (!invoices.length) return false;
   const invoiceSum = invoices.reduce((s, t) => s + t.signedAmountRdcView, 0);
-  if (invoiceSum >= 0) return false;
-  for (const t of customer.transactions) t.signedAmountRdcView = -t.signedAmountRdcView;
-  if (customer.balances.opening != null) customer.balances.opening = -customer.balances.opening;
-  if (customer.balances.closing != null) customer.balances.closing = -customer.balances.closing;
-  customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'info', message: 'Customer ledger printed in receivable view; signs normalized to RDC view', confidence: 90 });
-  return true;
+  const flipped = invoiceSum < 0;
+  if (flipped) {
+    for (const t of customer.transactions) t.signedAmountRdcView = -t.signedAmountRdcView;
+    customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'info', message: 'Customer ledger printed in receivable view; transaction signs normalized to RDC view', confidence: 90 });
+  }
+  // Balance signs can be printed in either convention independent of the row
+  // signs (e.g. a credit closing balance that is a positive RDC receivable).
+  // Choose the opening/closing sign combination that best satisfies
+  // opening + Σrows = closing; keep the parsed signs unless an alternative is
+  // decisively (10x) better.
+  const sum = customer.transactions.filter(t => !t.isNetZeroReversal).reduce((s, t) => s + t.signedAmountRdcView, 0);
+  const { opening, closing } = customer.balances;
+  if (closing != null) {
+    let best = { op: opening ?? 0, cl: closing, gap: Math.abs((opening ?? 0) + sum - closing) };
+    for (const op of opening != null ? [opening, -opening] : [0]) {
+      for (const cl of [closing, -closing]) {
+        const gap = Math.abs(op + sum - cl);
+        if (gap < best.gap / 10) best = { op, cl, gap };
+      }
+    }
+    if (best.cl !== closing || (opening != null && best.op !== opening)) {
+      customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'info', message: `Customer balance sign normalized (opening ${opening} -> ${best.op}, closing ${closing} -> ${best.cl}) to satisfy opening + rows = closing`, confidence: 85 });
+      if (opening != null) customer.balances.opening = best.op;
+      customer.balances.closing = best.cl;
+    }
+    // If the export omits the opening balance entirely (common in Tally
+    // period extracts), derive it so the statement stays internally
+    // consistent — flagged as derived, not verified.
+    if (customer.balances.opening == null) {
+      customer.balances.opening = (customer.balances.closing ?? 0) - sum;
+      customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'warn', message: `Customer opening balance not printed in ledger; derived as closing - transactions = ${customer.balances.opening.toFixed(2)} (unverified)`, confidence: 60 });
+    }
+  }
+  return flipped;
+}
+
+/** Same missing-opening derivation for the RDC side. */
+function deriveMissingOpening(side: ParseResult, label: string) {
+  if (side.balances.closing == null || side.balances.opening != null) return;
+  const sum = side.transactions.reduce((s, t) => s + t.signedAmountRdcView, 0);
+  side.balances.opening = side.balances.closing - sum;
+  if (Math.abs(side.balances.opening) > 1) {
+    side.parserLog.push({ sourceFile: side.transactions[0]?.sourceFile || label, level: 'warn', message: `${label} opening balance not printed in ledger; derived as closing - transactions = ${side.balances.opening.toFixed(2)} (unverified)`, confidence: 60 });
+  }
 }
 
 /** opening + Σ(signed txns) − closing; ≈0 when parsing captured every row correctly. */
@@ -66,6 +104,7 @@ function ledgerIntegrityGap(side: ParseResult): number | undefined {
 
 export function reconcile(rdc: ParseResult, customer: ParseResult, options: ReconcileOptions): ReconcileResult {
   normalizeCustomerOrientation(customer);
+  deriveMissingOpening(rdc, 'RDC');
   const netZeroReversals = applyCustomerNetZeroReversals(customer, options.paymentTolerance);
   const activeCustomer = customer.transactions.filter(t => !t.isNetZeroReversal);
   const outsidePeriodCustomerTxns = activeCustomer.filter(t => isOutsidePeriod(t.date, options.periodStart, options.periodEnd));
@@ -113,6 +152,74 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
       possibleMatches.push(matchRow({ matchStatus: 'POSSIBLE', reasonCode: 'POSSIBLE_MATCH_REVIEW_REQUIRED', rdcTxn: r, customerTxn: found.txn, rdcAmount: r.signedAmountRdcView, customerAmount: found.txn.signedAmountRdcView, difference: r.signedAmountRdcView - found.txn.signedAmountRdcView, confidence: found.confidence, remarks: found.reason }));
     }
   }
+  // ── RDC-side receipt reversals ──────────────────────────────────────────
+  // A REC that bounced is reversed by a REV on the same voucher; the pair nets
+  // to zero and must not pollute matching or the unmatched sheets. Accounts
+  // team: "REC and REV should be considered together".
+  const rdcReversalNetted: NormalizedTxn[] = [];
+  {
+    const byVoucher = new Map<string, NormalizedTxn[]>();
+    for (const r of rdcInPeriod) {
+      if (!paymentTypes.includes(r.voucherType) || !r.voucherNo) continue;
+      byVoucher.set(r.voucherNo, [...(byVoucher.get(r.voucherNo) || []), r]);
+    }
+    for (const group of byVoucher.values()) {
+      if (group.length < 2) continue;
+      const net = group.reduce((s, t) => s + t.signedAmountRdcView, 0);
+      if (Math.abs(net) <= options.paymentTolerance) {
+        for (const t of group) {
+          usedRdc.add(t.id);
+          t.parserNotes = [...(t.parserNotes || []), 'RDC receipt reversed (REC+REV net zero)'];
+          rdcReversalNetted.push(t);
+        }
+      }
+    }
+  }
+
+  // ── Grouped payment matching ────────────────────────────────────────────
+  // Tally books ONE payment voucher allocated across many invoices (Agst Ref
+  // children); RDC books ONE receipt for the whole cheque. Match the SUM of a
+  // customer payment voucher's allocations to an RDC receipt (REC/REV),
+  // comparing SIGNED amounts so a payment never pairs with a reversal.
+  const paymentGroups = new Map<string, NormalizedTxn[]>();
+  for (const c of customerInPeriod) {
+    if (usedCust.has(c.id) || !paymentTypes.includes(c.voucherType)) continue;
+    // Group ONLY allocation children under their parent voucher. Standalone
+    // payment rows stay individual — voucherNo can be a non-unique label like
+    // "PAYMENT" and must never merge unrelated payments into one group.
+    const key = c.parentVoucherNo ? `P:${c.parentVoucherNo}` : c.id;
+    paymentGroups.set(key, [...(paymentGroups.get(key) || []), c]);
+  }
+  for (const [voucher, group] of paymentGroups) {
+    const signedTotal = group.reduce((s, t) => s + t.signedAmountRdcView, 0);
+    const total = Math.abs(signedTotal);
+    if (total < 0.01) continue;
+    const groupDate = group[0].date;
+    let receipt: NormalizedTxn | undefined;
+    for (const r of rdcInPeriod) {
+      if (usedRdc.has(r.id) || !paymentTypes.includes(r.voucherType)) continue;
+      if (!within(signedTotal, r.signedAmountRdcView, options.paymentTolerance)) continue;
+      if (daysBetween(groupDate, r.date) > options.paymentDateToleranceDays) continue;
+      receipt = r;
+      break;
+    }
+    if (!receipt) continue;
+    usedRdc.add(receipt.id);
+    for (const t of group) usedCust.add(t.id);
+    matches.push(matchRow({
+      matchStatus: 'MATCHED',
+      rdcTxn: receipt,
+      customerTxn: group[0],
+      rdcAmount: receipt.signedAmountRdcView,
+      customerAmount: group.reduce((s, t) => s + t.signedAmountRdcView, 0),
+      difference: receipt.signedAmountRdcView - group.reduce((s, t) => s + t.signedAmountRdcView, 0),
+      confidence: 95,
+      remarks: group.length > 1
+        ? `Customer payment voucher ${voucher} (${group.length} invoice allocations totalling ${total.toFixed(2)}) matched to RDC receipt ${receipt.voucherNo || ''}`
+        : `Customer payment ${voucher} matched to RDC receipt ${receipt.voucherNo || ''} by amount`,
+    }));
+  }
+
   const unmatchedRdc = rdcInPeriod.filter(t => !usedRdc.has(t.id) && !['OTHER'].includes(t.voucherType)).map(t => matchRow({ reasonCode: reasonForRdc(t), rdcTxn: t, rdcAmount: t.signedAmountRdcView, difference: t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Present in RDC only' }));
   const unmatchedCustomer = customerInPeriod.filter(t => !usedCust.has(t.id) && !['OTHER'].includes(t.voucherType)).map(t => matchRow({ reasonCode: reasonForCustomer(t), customerTxn: t, customerAmount: t.signedAmountRdcView, difference: -t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Present in customer only' }));
   const outsidePeriodCustomer = outsidePeriodCustomerTxns.map(t => matchRow({ matchStatus: 'INFO', reasonCode: 'OUTSIDE_RDC_PERIOD_PRESENT_IN_CUSTOMER', customerTxn: t, customerAmount: t.signedAmountRdcView, difference: -t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Customer ledger item outside selected RDC period' }));
@@ -125,7 +232,7 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   const cards = { matchedCount: matches.length, possibleCount: possibleMatches.length, unmatchedRdcCount: unmatchedRdc.length, unmatchedCustomerCount: unmatchedCustomer.length, outsidePeriodCustomerCount: outsidePeriodCustomer.length, netZeroReversalCount: netZeroReversals.length, journalEntriesConsidered: journalEntries.length, tdsExceptionCount: tdsCompare.filter(t => t.matchStatus !== 'MATCHED').length, unexplainedDifference: summaryLines.at(-1)?.amount || 0, rdcLedgerIntegrityGap: Math.round((rdcGap || 0) * 100) / 100, customerLedgerIntegrityGap: Math.round((custGap || 0) * 100) / 100 };
   if (rdcGap != null && Math.abs(rdcGap) > 1) rdc.parserLog.push({ sourceFile: rdc.transactions[0]?.sourceFile || 'rdc', level: 'error', message: `RDC ledger integrity check FAILED: parsed rows differ from stated closing balance by ${rdcGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });
   if (custGap != null && Math.abs(custGap) > 1) customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'error', message: `Customer ledger integrity check FAILED: parsed rows differ from stated closing balance by ${custGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });
-  return { options, rdc, customer: { ...customer, transactions: activeCustomer }, matches, possibleMatches, unmatchedRdc, unmatchedCustomer, outsidePeriodCustomer, netZeroReversals, tdsCompare, journalEntries, openingClosing, summaryLines, parserLog: [...rdc.parserLog, ...customer.parserLog], cards };
+  return { options, rdc, customer: { ...customer, transactions: activeCustomer }, matches, possibleMatches, unmatchedRdc, unmatchedCustomer, outsidePeriodCustomer, netZeroReversals: [...netZeroReversals, ...rdcReversalNetted], tdsCompare, journalEntries, openingClosing, summaryLines, parserLog: [...rdc.parserLog, ...customer.parserLog], cards };
 }
 function reasonForRdc(t: NormalizedTxn): ReasonCode {
   if (t.parserNotes?.includes('LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW')) return 'LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW';
@@ -157,10 +264,20 @@ function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: Match
     { sign: '', particular: 'Balance As per ' + options.partyName, amount: custBal },
     { sign: '', particular: 'Difference', amount: rdcBal - custBal, remarks: 'RDC receivable - Customer receivable-view balance' },
   ];
-  // Opening balance difference is a standard reconciling line.
+  // Opening balance difference — presented per accounts-team convention as
+  // (Customer opening LESS RDC opening); the arithmetic contribution to the
+  // statement stays RDC − customer so the identity still nets to zero.
   const openingDiff = (rdc.balances.opening ?? 0) - (customer.balances.opening ?? 0);
   if (Math.abs(openingDiff) > 1 && (rdc.balances.opening != null || customer.balances.opening != null)) {
-    lines.push({ sign: openingDiff >= 0 ? 'Add' : 'Less', particular: 'Opening balance difference', amount: Math.abs(openingDiff), remarks: 'RDC opening minus customer opening (RDC view)', reasonCode: 'OPENING_BALANCE_MISMATCH' });
+    const custLessRdc = -openingDiff;
+    lines.push({
+      sign: custLessRdc >= 0 ? 'Add' : 'Less',
+      particular: 'Opening balance difference (Customer opening less RDC opening)',
+      amount: Math.abs(custLessRdc),
+      remarks: 'Customer opening minus RDC opening',
+      reasonCode: 'OPENING_BALANCE_MISMATCH',
+      contribution: openingDiff,
+    });
   }
   // Amount variances on reference-matched items (e.g. TDS/rounding/short booking).
   const matchedVariance = matches.reduce((s, m) => s + (m.difference || 0), 0);
@@ -180,7 +297,7 @@ function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: Match
   const custGap = ledgerIntegrityGap(customer);
   if (custGap != null && Math.abs(custGap) > 1) lines.push({ sign: custGap >= 0 ? 'Add' : 'Less', particular: '⚠ Customer ledger rows not fully captured by parser (integrity gap)', amount: Math.abs(custGap), remarks: 'Parsed customer rows do not tie to the stated closing balance — treat this reconciliation as INCOMPLETE' });
   if (netZero.length) lines.push({ sign: '', particular: 'Customer payment reversal / debit-credit netted to zero', amount: 0, remarks: 'Customer reversal netted to zero', reasonCode: 'CUSTOMER_PAYMENT_REVERSAL_NET_ZERO' });
-  const explained = lines.slice(3).reduce((s,l)=>s+(l.sign === 'Add' ? l.amount : l.sign === 'Less' ? -l.amount : 0),0);
+  const explained = lines.slice(3).reduce((s,l)=>s+(l.contribution ?? (l.sign === 'Add' ? l.amount : l.sign === 'Less' ? -l.amount : 0)),0);
   lines.push({ sign: '', particular: 'Unexplained Difference', amount: (rdcBal - custBal) - explained, remarks: 'After grouped Add/Less reconciling lines' });
   return lines;
 }

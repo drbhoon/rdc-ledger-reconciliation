@@ -32,12 +32,20 @@ function detect(rows: Row[]) {
   return 'GENERIC';
 }
 function classifyRdc(doc: string, narration: string, debit: number, credit: number): VoucherType {
+  // Doc Type column is authoritative when present (Oracle debtors export).
+  // REV (receipt reversal) reconciles together with REC per accounts team.
+  const d = doc.trim().toUpperCase();
+  const DOC_MAP: Record<string, VoucherType> = {
+    INV: 'INVOICE', REC: 'RECEIPT', REV: 'RECEIPT', CM: 'CREDIT_NOTE',
+    CN: 'CREDIT_NOTE', DM: 'DEBIT_NOTE', DN: 'DEBIT_NOTE', TDS: 'TDS',
+  };
+  if (DOC_MAP[d]) return DOC_MAP[d];
   const t = (doc + ' ' + narration).toLowerCase();
   if (/opening/.test(t)) return 'OPENING';
   if (/closing/.test(t)) return 'CLOSING';
   if (/tds|194q|194c|tax deducted/.test(t)) return 'TDS';
-  if (/credit note|armn| cn\b/.test(t)) return 'CREDIT_NOTE';
-  if (/debit note|arcm| d no/.test(t)) return 'DEBIT_NOTE';
+  if (/credit note|credit memo|armn| cn\b/.test(t)) return 'CREDIT_NOTE';
+  if (/debit note|debit memo|arcm| d no/.test(t)) return 'DEBIT_NOTE';
   if (/inv|sale|invoice/.test(t) || debit > 0) return 'INVOICE';
   if (/rec|receipt|payment|bank/.test(t) || credit > 0) return 'RECEIPT';
   return 'OTHER';
@@ -88,7 +96,11 @@ function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out:
     const refs = extractReferences([particulars, String(pick(row, ['GST Inv Number','Inv / Receipt Number','Bill No','Reference']) ?? '')]);
     const referenceNo = String(pick(row, ['GST Inv Number','Bill No','Reference','Inv / Receipt Number']) ?? refs[0] ?? '').trim();
     const voucherType = classifyRdc(docType, particulars + ' ' + referenceNo, debit, credit);
-    if (/total of debits|total/i.test(particulars + ' ' + docType) && debit && credit) {
+    // Summary rows: the label often sits in an unmapped column (e.g. "Grand
+    // Total" under Document Seq Number), so scan EVERY cell — a missed total
+    // row double-counts the entire ledger.
+    const allCells = Object.values(row).map(v => String(v ?? '')).join(' ');
+    if (/grand total|total of debits|period total|\btotal\b/i.test(allCells) && (debit || credit) && !date) {
       log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: 'Skipped total row' });
       continue;
     }
@@ -115,7 +127,15 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
   const addCustomerTxn = (row: Row, base: NonNullable<typeof parentBase>, refText: string, debit: number, credit: number, allocationType: 'New Ref' | 'Agst Ref' | 'Inferred' | '') => {
     const particulars = [base.particulars, String(pick(row, ['Particulars','Narration','Bill wise Details']) ?? ''), refText].filter(Boolean).join(' | ');
     const refs = extractReferences([particulars, refText, base.voucherNo]);
-    const referenceNo = refs[0] || refText.replace(/New Ref|Agst Ref/gi, '').trim();
+    // Fallback reference: strip any allocation amount / Dr-Cr tokens that were
+    // joined onto the ref text (else "21MU25AR1253 53775 cr" fuses into one blob).
+    const fallbackRef = refText
+      .replace(/New Ref|Agst Ref/gi, '')
+      .replace(/\s+\d[\d,]*(?:\.\d{1,2})?\s*(?:dr|cr)?\s*$/i, '')
+      .replace(/\s+\d[\d,]*(?:\.\d{1,2})?\s*(?:dr|cr)?\s*$/i, '')
+      .replace(/\s+(?:dr|cr)\s*$/i, '')
+      .trim();
+    const referenceNo = refs[0] || fallbackRef;
     const voucherType = classifyCustomer(base.vchType || '', particulars, debit, credit, refs);
     const notes: string[] = /journal|\bjv\b/i.test(base.vchType || '') ? ['SOURCE_VOUCHER_TYPE_JOURNAL'] : [];
     let confidence = refs.length ? 88 : 78;
@@ -161,18 +181,26 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
       continue;
     }
     if (parentBase && /New Ref|Agst Ref/i.test(line)) {
+      const parentHadChildrenBefore = parentHadChildren;
       parentHadChildren = true;
       // Generic Tally allocation-row scan: cell positions vary by export, so
       // identify the reference, the Dr/Cr token and the amount by *shape*
       // rather than hard-coded column keys (fixes amounts missing on
       // Agst Ref rows, e.g. Talib).
       const cells = Object.values(row).map(v => String(v ?? '').trim()).filter(Boolean);
-      const MONEY_CELL = /^-?\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?$/;
+      // Accept both comma-grouped and PLAIN digit amounts (Tally often exports
+      // "53690" without separators — previously this failed and the code fell
+      // back to reading "30 Days" as 30).
+      const MONEY_CELL = /^-?\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?$|^-?\d+(?:\.\d{1,2})?$/;
       const allocRef = cells.find(c => /^[0-9]{1,2}[A-Z]{2,4}\d{2}[A-Z0-9/-]{3,}$/i.test(c))
         || String((row as any).__EMPTY_1 || '');
       const signCell = cells.find(c => /^(dr|cr)$/i.test(c));
       const moneyCells = cells.filter(c => MONEY_CELL.test(c) && c !== allocRef);
-      const allocAmount = moneyCells.length ? absAmount(moneyCells[moneyCells.length - 1]) : absAmount((row as any)['Vch Type'] || (row as any).__EMPTY_2 || (row as any).__EMPTY_3);
+      // No money cell on the child (e.g. TDS journal allocations)? Inherit the
+      // parent voucher's amount for its first child — never fall back to text
+      // like "30 Days" (absAmount would read it as 30).
+      const parentAmount = !parentHadChildrenBefore ? (parentBase.debit || parentBase.credit || 0) : 0;
+      const allocAmount = moneyCells.length ? absAmount(moneyCells[moneyCells.length - 1]) : parentAmount;
       const allocSign = (signCell || String((row as any)['Vch No.'] || (row as any)['Vch No'] || '')).toLowerCase();
       // Fall back to the parent's side when the child row omits Dr/Cr.
       const parentSide = parentBase.debit > 0 ? 'dr' : parentBase.credit > 0 ? 'cr' : '';

@@ -35,6 +35,18 @@ export function extractReferences(fields: Array<string | undefined | null>) {
   }
   return Array.from(found);
 }
+/**
+ * Collapse a reference to its stable skeleton: plant/city prefix + sequence,
+ * dropping the year+doc-type infix. Customers often book RDC invoices this
+ * way — "7MU25BP1-6960" appears in their ledger as "7MU6960". Comparing
+ * collapsed forms (together with an equal amount) recovers these matches.
+ */
+export function collapseReference(ref?: string) {
+  const n = normalizeReference(ref);
+  if (!n) return '';
+  return n.replace(/(\d{2})(?:ARS|ARCM|ARMN|BP\d*)-?/, '');
+}
+
 export function hasTruncatedReference(fields: Array<string | undefined | null>) {
   return TRUNCATED_PATTERN.test(fields.filter(Boolean).join(' | '));
 }

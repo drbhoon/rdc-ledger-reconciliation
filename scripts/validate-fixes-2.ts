@@ -53,7 +53,9 @@ async function main() {
     // Round-3: sign convention = Customer − RDC on every line
     const line = (re: RegExp) => res.summaryLines.find(l => re.test(l.particular));
     const varL = line(/Amount differences on reference-matched/);
-    ck('Talib r3: matched-variance sign per Customer−RDC (Add 42)', varL?.sign === 'Add' && Math.abs(varL.amount - 42.37) < 1, `${varL?.sign} ${fmt(varL?.amount)}`);
+    // Collapsed-ref matches carry paise-level (≤ ₹1) differences that sum into
+    // this line, so assert the sign convention and that it stays small.
+    ck('Talib r3: matched-variance sign per Customer−RDC (Add, small)', varL?.sign === 'Add' && varL.amount < 1000, `${varL?.sign} ${fmt(varL?.amount)}`);
     const refT = line(/Reference truncated/);
     ck('Talib r3: unmatched-RDC group displayed as Less', !refT || refT.sign === 'Less', `${refT?.sign} ${fmt(refT?.amount)}`);
     const entC = line(/Entry accounted by customer/);
@@ -70,6 +72,16 @@ async function main() {
     ck('Talib r3: PYT/38154 unmatched payment aggregated = 14,49,110', !!p1 && Math.abs(Math.abs(p1.customerAmount || 0) - 1449110) < 1, fmt(p1?.customerAmount));
     ck('Talib r3: PYT/40622 unmatched payment aggregated = 20,46,903', !!p2 && Math.abs(Math.abs(p2.customerAmount || 0) - 2046903) < 1, fmt(p2?.customerAmount));
     ck('Talib r3: unmatched customer receipts are exactly voucher-level rows', unRec.length === 2, String(unRec.length));
+
+    // Round-4: truncated-ref matching + probable-match suggestions
+    const collapsed = res.matches.filter(m => /Truncated customer reference/.test(m.remarks || ''));
+    ck('Talib r4: truncated refs matched (10MU5071 = 10MU25ARS5071 style, > 1000)', collapsed.length > 1000, String(collapsed.length));
+    const sample = collapsed.find(m => (m.customerTxn?.referenceNo || '') === '10MU5071');
+    ck('Talib r4: 10MU5071 matched to 10MU25ARS5071', !!sample && (sample.rdcTxn?.referenceNo || '') === '10MU25ARS5071', `${sample?.customerTxn?.referenceNo} -> ${sample?.rdcTxn?.referenceNo}`);
+    const withSugg = res.unmatchedCustomer.filter(m => m.suggestion);
+    ck('Talib r4: probable-RDC suggestions on unmatched customer rows (> 100)', withSugg.length > 100, String(withSugg.length));
+    ck('Talib r4: suggestion carries RDC ref + amount + row', !!withSugg[0]?.suggestion && /₹/.test(withSugg[0].suggestion!) && /RDC row/.test(withSugg[0].suggestion!), (withSugg[0]?.suggestion || '').slice(0, 60));
+    ck('Talib r4: still certified after new tiers', (res.cards as any).certified === true, String((res.cards as any).verdict));
   }
 
   // ── SYNERGIA ───────────────────────────────────────────────────────────

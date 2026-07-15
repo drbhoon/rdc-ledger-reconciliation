@@ -1,9 +1,9 @@
 import ExcelJS from 'exceljs';
 import type { MatchRow, NormalizedTxn, ReconcileResult, SummaryLine } from './types';
-const columns = [ ['sourceFile','Source File'], ['sourceSheet','Source Sheet/Page'], ['sourceRow','Source Row/Line'], ['referenceNo','Original Reference'], ['normalizedReferenceNo','Normalized Reference'], ['date','Date'], ['rdcAmount','RDC Amount'], ['customerAmount','Customer Amount'], ['difference','Difference'], ['matchStatus','Match Status'], ['reasonCode','Reason Code'], ['confidence','Confidence Score'], ['parserNotes','Parser Notes'], ['aiExtractedValue','AI Extracted Value'], ['aiConfidence','AI Confidence'], ['aiReason','AI Reason'], ['userApproved','User Approved'] ] as const;
+const columns = [ ['sourceFile','Source File'], ['sourceSheet','Source Sheet/Page'], ['sourceRow','Source Row/Line'], ['referenceNo','Original Reference'], ['normalizedReferenceNo','Normalized Reference'], ['suggestion','Probable RDC Match (same amount)'], ['date','Date'], ['rdcAmount','RDC Amount'], ['customerAmount','Customer Amount'], ['difference','Difference'], ['matchStatus','Match Status'], ['reasonCode','Reason Code'], ['confidence','Confidence Score'], ['parserNotes','Parser Notes'], ['aiExtractedValue','AI Extracted Value'], ['aiConfidence','AI Confidence'], ['aiReason','AI Reason'], ['userApproved','User Approved'] ] as const;
 function rowFromMatch(m: MatchRow) {
   const t = m.rdcTxn || m.customerTxn;
-  return { sourceFile: t?.sourceFile, sourceSheet: t?.sourceSheet || t?.sourcePage, sourceRow: t?.sourceRow, referenceNo: t?.referenceNo, normalizedReferenceNo: t?.normalizedReferenceNo, date: t?.date, rdcAmount: m.rdcAmount ?? m.rdcTxn?.signedAmountRdcView ?? '', customerAmount: m.customerAmount ?? m.customerTxn?.signedAmountRdcView ?? '', difference: m.difference, matchStatus: m.matchStatus, reasonCode: m.reasonCode, confidence: m.confidence, parserNotes: [t?.parserNotes?.join('; '), m.remarks].filter(Boolean).join('; '), aiExtractedValue: t?.aiExtractedReferences?.join(', '), aiConfidence: t?.aiConfidence, aiReason: t?.aiReason, userApproved: t?.userApproved ? 'Yes' : 'No' };
+  return { sourceFile: t?.sourceFile, sourceSheet: t?.sourceSheet || t?.sourcePage, sourceRow: t?.sourceRow, referenceNo: t?.referenceNo, normalizedReferenceNo: t?.normalizedReferenceNo, suggestion: m.suggestion || '', date: t?.date, rdcAmount: m.rdcAmount ?? m.rdcTxn?.signedAmountRdcView ?? '', customerAmount: m.customerAmount ?? m.customerTxn?.signedAmountRdcView ?? '', difference: m.difference, matchStatus: m.matchStatus, reasonCode: m.reasonCode, confidence: m.confidence, parserNotes: [t?.parserNotes?.join('; '), m.remarks].filter(Boolean).join('; '), aiExtractedValue: t?.aiExtractedReferences?.join(', '), aiConfidence: t?.aiConfidence, aiReason: t?.aiReason, userApproved: t?.userApproved ? 'Yes' : 'No' };
 }
 function rowFromTxn(t: NormalizedTxn, status = 'INFO', reason = '') {
   return { sourceFile: t.sourceFile, sourceSheet: t.sourceSheet || t.sourcePage, sourceRow: t.sourceRow, referenceNo: t.referenceNo, normalizedReferenceNo: t.normalizedReferenceNo, date: t.date, rdcAmount: t.sourceSide === 'RDC' ? t.signedAmountRdcView : '', customerAmount: t.sourceSide === 'CUSTOMER' ? t.signedAmountRdcView : '', difference: '', matchStatus: status, reasonCode: reason, confidence: t.parseConfidence, parserNotes: t.parserNotes?.join('; '), aiExtractedValue: t.aiExtractedReferences?.join(', '), aiConfidence: t.aiConfidence, aiReason: t.aiReason, userApproved: t.userApproved ? 'Yes' : 'No' };
@@ -15,7 +15,7 @@ function addSheet(wb: ExcelJS.Workbook, name: string, rows: Record<string, unkno
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF00' } };
   rows.forEach(r => ws.addRow(r));
   ws.views = [{ state: 'frozen', ySplit: 1 }];
-  ws.autoFilter = { from: 'A1', to: 'Q1' };
+  ws.autoFilter = { from: 'A1', to: 'R1' };
 }
 export async function writeReport(result: ReconcileResult, filePath: string) {
   const wb = new ExcelJS.Workbook();

@@ -1,7 +1,7 @@
 import { v4 as uuid } from 'uuid';
 import { within } from './amount';
 import { daysBetween, isOutsidePeriod } from './date';
-import { normalizeNarration } from './reference';
+import { collapseReference, normalizeNarration } from './reference';
 import type { MatchRow, NormalizedTxn, ParseResult, ReconcileOptions, ReconcileResult, ReasonCode, SummaryLine, VoucherType } from './types';
 const invoiceTypes: VoucherType[] = ['INVOICE','JOURNAL_INVOICE','DEBIT_NOTE'];
 const paymentTypes: VoucherType[] = ['RECEIPT','PAYMENT'];
@@ -9,6 +9,12 @@ const tdsTypes: VoucherType[] = ['TDS','JOURNAL_TDS'];
 const creditTypes: VoucherType[] = ['CREDIT_NOTE'];
 function absSigned(t: NormalizedTxn) { return Math.abs(t.signedAmountRdcView); }
 function refKey(t: NormalizedTxn) { return t.normalizedReferenceNo || t.extractedReferences?.[0] || ''; }
+const collapsedCache = new WeakMap<NormalizedTxn, string>();
+function collapsedKey(t: NormalizedTxn) {
+  let c = collapsedCache.get(t);
+  if (c === undefined) { c = collapseReference(refKey(t)); collapsedCache.set(t, c); }
+  return c;
+}
 function matchRow(input: Partial<MatchRow>): MatchRow { return { matchId: uuid(), matchStatus: 'EXCEPTION', difference: 0, confidence: 0, ...input }; }
 export function applyCustomerNetZeroReversals(customer: ParseResult, tolerance = 1) {
   const groups = new Map<string, NormalizedTxn[]>();
@@ -116,9 +122,11 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   const possibleMatches: MatchRow[] = [];
   const tryMatch = (rdcTxn: NormalizedTxn, candidates: NormalizedTxn[], types: VoucherType[], dateTolerance: number, amountTolerance: number) => {
     const rref = refKey(rdcTxn);
+    const rcol = collapsedKey(rdcTxn);
     const amount = absSigned(rdcTxn);
     let best: { txn: NormalizedTxn; confidence: number; reason?: string } | undefined;
     let refBest: { txn: NormalizedTxn; confidence: number; reason?: string } | undefined;
+    let colBest: { txn: NormalizedTxn; confidence: number; reason?: string; days: number } | undefined;
     for (const c of candidates) {
       if (usedCust.has(c.id) || !types.includes(c.voucherType)) continue;
       const cref = refKey(c);
@@ -126,15 +134,22 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
       const rrefs = rdcTxn.extractedReferences || [];
       const sameRef = !!(rref && cref && rref === cref) || !!(rref && crefs.includes(rref)) || !!(cref && rrefs.includes(cref));
       const amountOk = within(amount, absSigned(c), amountTolerance);
-      const dateOk = daysBetween(rdcTxn.date, c.date) <= dateTolerance;
+      const days = daysBetween(rdcTxn.date, c.date);
+      const dateOk = days <= dateTolerance;
       if (sameRef && amountOk) return { txn: c, confidence: 100, reason: 'Reference matched' };
       // Reference-first: a matching reference IS a match even when amounts
       // differ (the difference is reported), instead of dumping the pair into
       // both Unmatched sheets. This is what a manual VLOOKUP does.
       if (sameRef && !refBest) refBest = { txn: c, confidence: 88, reason: `Reference matched; amount differs by ${(amount - absSigned(c)).toFixed(2)} — verify amount` };
+      // Truncated-reference tier: customers often book "7MU25BP1-6960" as
+      // "7MU6960" (year+doc-type infix dropped). Collapsed refs equal AND
+      // amount equal = a solid match; prefer the nearest date on collisions.
+      if (rcol && rcol.length >= 5 && collapsedKey(c) === rcol && amountOk) {
+        if (!colBest || days < colBest.days) colBest = { txn: c, confidence: 90, reason: `Truncated customer reference matched (${cref || rcol} = ${rref}) with equal amount`, days };
+      }
       if (amountOk && dateOk && !best) best = { txn: c, confidence: 72, reason: 'Amount and date near; review required' };
     }
-    return refBest || best;
+    return refBest || colBest || best;
   };
   for (const r of rdcInPeriod) {
     // Credit notes are often booked by customers as (negative) purchases or
@@ -259,6 +274,42 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     ...customerInPeriod.filter(t => !usedCust.has(t.id) && !['OTHER'].includes(t.voucherType)),
     ...syntheticUnmatchedPayments,
   ].map(t => matchRow({ reasonCode: reasonForCustomer(t), customerTxn: t, customerAmount: t.signedAmountRdcView, difference: -t.signedAmountRdcView, confidence: t.parseConfidence, remarks: t.parserNotes?.includes('Aggregated unmatched payment allocations to voucher level') ? 'Customer payment voucher not matched to any RDC receipt' : 'Present in customer only' }));
+
+  // ── Probable-match suggestions ───────────────────────────────────────────
+  // Customers sometimes book invoices under fabricated reference numbers that
+  // exist nowhere in RDC's books. When an unmatched customer invoice's AMOUNT
+  // equals an unmatched RDC invoice's, suggest that RDC invoice (nearest date,
+  // each RDC invoice suggested at most once) in the Unmatched_Customer sheet —
+  // together with the customer row reference this pinpoints the probable pair
+  // for the accounts team without auto-matching on amount alone.
+  {
+    const suggestible = unmatchedRdc.filter(m => m.rdcTxn && [...invoiceTypes, ...creditTypes].includes(m.rdcTxn.voucherType));
+    const takenRdc = new Set<string>();
+    const custRows = unmatchedCustomer
+      .filter(m => m.customerTxn && [...invoiceTypes, ...creditTypes].includes(m.customerTxn.voucherType))
+      .sort((a, b) => (a.customerTxn!.date || '').localeCompare(b.customerTxn!.date || ''));
+    for (const m of custRows) {
+      const c = m.customerTxn!;
+      const amount = Math.abs(c.signedAmountRdcView);
+      if (amount < 0.01) continue;
+      let bestS: { r: NormalizedTxn; days: number } | undefined;
+      for (const um of suggestible) {
+        const r = um.rdcTxn!;
+        if (takenRdc.has(r.id)) continue;
+        if (!within(amount, Math.abs(r.signedAmountRdcView), options.invoiceTolerance)) continue;
+        const days = daysBetween(c.date, r.date);
+        if (days > 60) continue;
+        if (!bestS || days < bestS.days) bestS = { r, days };
+      }
+      if (!bestS) continue;
+      takenRdc.add(bestS.r.id);
+      const r = bestS.r;
+      m.suggestion = `${r.referenceNo || r.voucherNo || '?'} · ₹${Math.abs(r.signedAmountRdcView).toLocaleString('en-IN')} · ${r.date || ''} · RDC row ${r.sourceRow}`;
+      // Mirror the hint on the RDC side so both teams see the same pairing.
+      const rdcRow = suggestible.find(um => um.rdcTxn!.id === r.id);
+      if (rdcRow) rdcRow.suggestion = `${c.referenceNo || c.voucherNo || '?'} · ₹${Math.abs(c.signedAmountRdcView).toLocaleString('en-IN')} · ${c.date || ''} · customer row ${c.sourceRow}`;
+    }
+  }
   const outsidePeriodCustomer = outsidePeriodCustomerTxns.map(t => matchRow({ matchStatus: 'INFO', reasonCode: 'OUTSIDE_RDC_PERIOD_PRESENT_IN_CUSTOMER', customerTxn: t, customerAmount: t.signedAmountRdcView, difference: -t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Customer ledger item outside selected RDC period' }));
   const openingClosing = openingClosingRows(rdc, customer);
   const tdsCompare = [...matches, ...unmatchedRdc, ...unmatchedCustomer].filter(m => [m.rdcTxn?.voucherType, m.customerTxn?.voucherType].some(v => v && tdsTypes.includes(v)));

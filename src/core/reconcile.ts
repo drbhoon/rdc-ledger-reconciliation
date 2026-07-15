@@ -220,8 +220,45 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     }));
   }
 
+  // Unmatched customer payment ALLOCATION children are re-aggregated to their
+  // parent voucher so the report shows "PYT/38154  14,49,110" (one row per
+  // payment, as in the customer's ledger) instead of dozens of invoice-level
+  // allocation fragments with confusing references.
+  const syntheticUnmatchedPayments: NormalizedTxn[] = [];
+  {
+    const leftover = new Map<string, NormalizedTxn[]>();
+    for (const c of customerInPeriod) {
+      if (usedCust.has(c.id) || !paymentTypes.includes(c.voucherType) || !c.parentVoucherNo) continue;
+      leftover.set(c.parentVoucherNo, [...(leftover.get(c.parentVoucherNo) || []), c]);
+    }
+    for (const [voucher, group] of leftover) {
+      if (group.length < 2 && !group[0].allocationType) continue;
+      for (const t of group) usedCust.add(t.id);
+      const debit = group.reduce((s, t) => s + t.debit, 0);
+      const credit = group.reduce((s, t) => s + t.credit, 0);
+      syntheticUnmatchedPayments.push({
+        ...group[0],
+        id: uuid(),
+        voucherNo: voucher,
+        referenceNo: voucher,
+        normalizedReferenceNo: voucher,
+        extractedReferences: [],
+        allocationType: '',
+        sourceRow: group.map(g => g.sourceRow).join(','),
+        particulars: `Payment voucher ${voucher} (${group.length} invoice allocation${group.length > 1 ? 's' : ''})`,
+        narration: (group[0].narration || '').split(' | ').slice(0, 3).join(' | '),
+        debit, credit,
+        signedAmountRdcView: group.reduce((s, t) => s + t.signedAmountRdcView, 0),
+        parserNotes: [...(group[0].parserNotes || []), 'Aggregated unmatched payment allocations to voucher level'],
+      });
+    }
+  }
+
   const unmatchedRdc = rdcInPeriod.filter(t => !usedRdc.has(t.id) && !['OTHER'].includes(t.voucherType)).map(t => matchRow({ reasonCode: reasonForRdc(t), rdcTxn: t, rdcAmount: t.signedAmountRdcView, difference: t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Present in RDC only' }));
-  const unmatchedCustomer = customerInPeriod.filter(t => !usedCust.has(t.id) && !['OTHER'].includes(t.voucherType)).map(t => matchRow({ reasonCode: reasonForCustomer(t), customerTxn: t, customerAmount: t.signedAmountRdcView, difference: -t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Present in customer only' }));
+  const unmatchedCustomer = [
+    ...customerInPeriod.filter(t => !usedCust.has(t.id) && !['OTHER'].includes(t.voucherType)),
+    ...syntheticUnmatchedPayments,
+  ].map(t => matchRow({ reasonCode: reasonForCustomer(t), customerTxn: t, customerAmount: t.signedAmountRdcView, difference: -t.signedAmountRdcView, confidence: t.parseConfidence, remarks: t.parserNotes?.includes('Aggregated unmatched payment allocations to voucher level') ? 'Customer payment voucher not matched to any RDC receipt' : 'Present in customer only' }));
   const outsidePeriodCustomer = outsidePeriodCustomerTxns.map(t => matchRow({ matchStatus: 'INFO', reasonCode: 'OUTSIDE_RDC_PERIOD_PRESENT_IN_CUSTOMER', customerTxn: t, customerAmount: t.signedAmountRdcView, difference: -t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Customer ledger item outside selected RDC period' }));
   const openingClosing = openingClosingRows(rdc, customer);
   const tdsCompare = [...matches, ...unmatchedRdc, ...unmatchedCustomer].filter(m => [m.rdcTxn?.voucherType, m.customerTxn?.voucherType].some(v => v && tdsTypes.includes(v)));
@@ -264,38 +301,44 @@ function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: Match
     { sign: '', particular: 'Balance As per ' + options.partyName, amount: custBal },
     { sign: '', particular: 'Difference', amount: rdcBal - custBal, remarks: 'RDC receivable - Customer receivable-view balance' },
   ];
-  // Opening balance difference — presented per accounts-team convention as
-  // (Customer opening LESS RDC opening); the arithmetic contribution to the
-  // statement stays RDC − customer so the identity still nets to zero.
+  // ── Accounts-team sign convention (validated on Balaji/Synergia/Talib) ──
+  // Every reconciling line is DISPLAYED as (Customer amount − RDC amount):
+  // sign = Add when that is positive, Less when negative. Internally each
+  // line keeps its RDC−Customer contribution so the statement identity
+  // Difference − Σcontribution = 0 (equivalently their check point:
+  // Difference + Σ(Customer−RDC) = 0) always holds.
+  const pushLine = (particular: string, rdcMinusCust: number, remarks?: string, reasonCode?: ReasonCode) => {
+    const custMinusRdc = -rdcMinusCust;
+    lines.push({
+      sign: custMinusRdc >= 0 ? 'Add' : 'Less',
+      particular,
+      amount: Math.abs(custMinusRdc),
+      remarks,
+      reasonCode,
+      contribution: rdcMinusCust,
+    });
+  };
   const openingDiff = (rdc.balances.opening ?? 0) - (customer.balances.opening ?? 0);
   if (Math.abs(openingDiff) > 1 && (rdc.balances.opening != null || customer.balances.opening != null)) {
-    const custLessRdc = -openingDiff;
-    lines.push({
-      sign: custLessRdc >= 0 ? 'Add' : 'Less',
-      particular: 'Opening balance difference (Customer opening less RDC opening)',
-      amount: Math.abs(custLessRdc),
-      remarks: 'Customer opening minus RDC opening',
-      reasonCode: 'OPENING_BALANCE_MISMATCH',
-      contribution: openingDiff,
-    });
+    pushLine('Opening balance difference (Customer opening less RDC opening)', openingDiff, 'Customer opening minus RDC opening', 'OPENING_BALANCE_MISMATCH');
   }
   // Amount variances on reference-matched items (e.g. TDS/rounding/short booking).
   const matchedVariance = matches.reduce((s, m) => s + (m.difference || 0), 0);
   if (Math.abs(matchedVariance) > 1) {
-    lines.push({ sign: matchedVariance >= 0 ? 'Add' : 'Less', particular: 'Amount differences on reference-matched invoices/receipts', amount: Math.abs(matchedVariance), remarks: 'Same reference on both sides but amounts differ; see Matched_Invoices Difference column', reasonCode: 'AMOUNT_MISMATCH' });
+    pushLine('Amount differences on reference-matched invoices/receipts', matchedVariance, 'Customer minus RDC on same-reference items; see Matched_Invoices Difference column', 'AMOUNT_MISMATCH');
   }
   const grouped = new Map<string, MatchRow[]>();
   for (const e of exceptions) grouped.set(e.reasonCode || 'LOW_PARSE_CONFIDENCE', [...(grouped.get(e.reasonCode || 'LOW_PARSE_CONFIDENCE') || []), e]);
   for (const [reason, rows] of grouped) {
     const amount = rows.reduce((s,r)=>s+r.difference,0);
     if (Math.abs(amount) <= 1) continue;
-    lines.push({ sign: amount >= 0 ? 'Add' : 'Less', particular: particularFor(reason as ReasonCode), amount: Math.abs(amount), remarks: remarkFor(reason as ReasonCode), reasonCode: reason as ReasonCode });
+    pushLine(particularFor(reason as ReasonCode), amount, remarkFor(reason as ReasonCode), reason as ReasonCode);
   }
   // Surface parser integrity gaps so an unexplained difference is attributable.
   const rdcGap = ledgerIntegrityGap(rdc);
-  if (rdcGap != null && Math.abs(rdcGap) > 1) lines.push({ sign: rdcGap >= 0 ? 'Less' : 'Add', particular: '⚠ RDC ledger rows not fully captured by parser (integrity gap)', amount: Math.abs(rdcGap), remarks: 'Parsed RDC rows do not tie to the stated closing balance — treat this reconciliation as INCOMPLETE' });
+  if (rdcGap != null && Math.abs(rdcGap) > 1) pushLine('⚠ RDC ledger rows not fully captured by parser (integrity gap)', -rdcGap, 'Parsed RDC rows do not tie to the stated closing balance — treat this reconciliation as INCOMPLETE');
   const custGap = ledgerIntegrityGap(customer);
-  if (custGap != null && Math.abs(custGap) > 1) lines.push({ sign: custGap >= 0 ? 'Add' : 'Less', particular: '⚠ Customer ledger rows not fully captured by parser (integrity gap)', amount: Math.abs(custGap), remarks: 'Parsed customer rows do not tie to the stated closing balance — treat this reconciliation as INCOMPLETE' });
+  if (custGap != null && Math.abs(custGap) > 1) pushLine('⚠ Customer ledger rows not fully captured by parser (integrity gap)', custGap, 'Parsed customer rows do not tie to the stated closing balance — treat this reconciliation as INCOMPLETE');
   if (netZero.length) lines.push({ sign: '', particular: 'Customer payment reversal / debit-credit netted to zero', amount: 0, remarks: 'Customer reversal netted to zero', reasonCode: 'CUSTOMER_PAYMENT_REVERSAL_NET_ZERO' });
   const explained = lines.slice(3).reduce((s,l)=>s+(l.contribution ?? (l.sign === 'Add' ? l.amount : l.sign === 'Less' ? -l.amount : 0)),0);
   lines.push({ sign: '', particular: 'Unexplained Difference', amount: (rdcBal - custBal) - explained, remarks: 'After grouped Add/Less reconciling lines' });

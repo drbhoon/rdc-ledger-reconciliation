@@ -49,6 +49,27 @@ async function main() {
     ck('Talib: matched-variance line sane (< 50L, was 6.95Cr)', !matchedVariance || matchedVariance.amount < 5000000, fmt(matchedVariance?.amount));
     console.log(`matched=${res.matches.length} (receipts ${recMatches.length}) unexplained=${fmt(res.summaryLines.at(-1)?.amount)}`);
     ck('Talib: unexplained ≈ 0', Math.abs(res.summaryLines.at(-1)?.amount || 0) < 1, fmt(res.summaryLines.at(-1)?.amount));
+
+    // Round-3: sign convention = Customer − RDC on every line
+    const line = (re: RegExp) => res.summaryLines.find(l => re.test(l.particular));
+    const varL = line(/Amount differences on reference-matched/);
+    ck('Talib r3: matched-variance sign per Customer−RDC (Add 42)', varL?.sign === 'Add' && Math.abs(varL.amount - 42.37) < 1, `${varL?.sign} ${fmt(varL?.amount)}`);
+    const refT = line(/Reference truncated/);
+    ck('Talib r3: unmatched-RDC group displayed as Less', !refT || refT.sign === 'Less', `${refT?.sign} ${fmt(refT?.amount)}`);
+    const entC = line(/Entry accounted by customer/);
+    ck('Talib r3: unmatched-customer group displayed as Add', !entC || entC.sign === 'Add', `${entC?.sign} ${fmt(entC?.amount)}`);
+    const tdsL = line(/TDS deducted by customer/);
+    ck('Talib r3: TDS journal line displayed as Less', !tdsL || tdsL.sign === 'Less', `${tdsL?.sign} ${fmt(tdsL?.amount)}`);
+    // Round-3: unmatched customer refs must be clean (no 7MU696053690CR fusions)
+    const fused = res.unmatchedCustomer.filter(m => /\d{3,}CR$/i.test(m.customerTxn?.normalizedReferenceNo || ''));
+    ck('Talib r3: no fused refs in Unmatched_Customer', fused.length === 0, `${fused.length} e.g. ${fused[0]?.customerTxn?.normalizedReferenceNo || ''}`);
+    // Round-3: the two unmatched payments appear voucher-level with correct totals
+    const unRec = res.unmatchedCustomer.filter(m => isPay(m.customerTxn?.voucherType));
+    const p1 = unRec.find(m => (m.customerTxn?.voucherNo || '').includes('PYT/38154'));
+    const p2 = unRec.find(m => (m.customerTxn?.voucherNo || '').includes('PYT/40622'));
+    ck('Talib r3: PYT/38154 unmatched payment aggregated = 14,49,110', !!p1 && Math.abs(Math.abs(p1.customerAmount || 0) - 1449110) < 1, fmt(p1?.customerAmount));
+    ck('Talib r3: PYT/40622 unmatched payment aggregated = 20,46,903', !!p2 && Math.abs(Math.abs(p2.customerAmount || 0) - 2046903) < 1, fmt(p2?.customerAmount));
+    ck('Talib r3: unmatched customer receipts are exactly voucher-level rows', unRec.length === 2, String(unRec.length));
   }
 
   // ── SYNERGIA ───────────────────────────────────────────────────────────
@@ -69,6 +90,11 @@ async function main() {
     ck('Synergia: unexplained ≈ 0', Math.abs(res.summaryLines.at(-1)?.amount || 0) < 1, fmt(res.summaryLines.at(-1)?.amount));
     const gapLines = res.summaryLines.filter(l => /integrity gap/.test(l.particular));
     console.log('gap lines:', gapLines.map(l => `${l.sign} ${fmt(l.amount)}`).join('; ') || 'none');
+    // Round-3 sign convention
+    const varS = res.summaryLines.find(l => /Amount differences on reference-matched/.test(l.particular));
+    ck('Synergia r3: matched-variance displayed as Less 9,571.48', varS?.sign === 'Less' && Math.abs(varS.amount - 9571.48) < 1, `${varS?.sign} ${fmt(varS?.amount)}`);
+    const checkpoint = res.summaryLines[2].amount + res.summaryLines.slice(3, -1).reduce((s, l) => s + (l.sign === 'Add' ? l.amount : l.sign === 'Less' ? -l.amount : 0), 0);
+    ck('Synergia r3: check point (Difference + Σ signed lines) = 0', Math.abs(checkpoint) < 1, fmt(checkpoint));
   }
 
   // ── BALAJI ─────────────────────────────────────────────────────────────
@@ -84,6 +110,15 @@ async function main() {
     ck('Balaji: payments matched to receipts (> 0)', recMatches.length > 0, String(recMatches.length));
     ck('Balaji: unexplained ≈ 0', Math.abs(res.summaryLines.at(-1)?.amount || 0) < 1, fmt(res.summaryLines.at(-1)?.amount));
     console.log(`matched=${res.matches.length} (receipts ${recMatches.length})`);
+    // Round-3 sign convention (their table: variance Less 7,011.28; RDC-only Less; customer-only Add)
+    const varB = res.summaryLines.find(l => /Amount differences on reference-matched/.test(l.particular));
+    ck('Balaji r3: matched-variance displayed as Less 7,011.28', varB?.sign === 'Less' && Math.abs(varB.amount - 7011.28) < 1, `${varB?.sign} ${fmt(varB?.amount)}`);
+    const misC = res.summaryLines.find(l => /present in RDC not booked by customer/.test(l.particular));
+    ck('Balaji r3: RDC-only line displayed as Less', !misC || misC.sign === 'Less', `${misC?.sign} ${fmt(misC?.amount)}`);
+    const misR = res.summaryLines.find(l => /Entry accounted by customer/.test(l.particular));
+    ck('Balaji r3: customer-only line displayed as Add', !misR || misR.sign === 'Add', `${misR?.sign} ${fmt(misR?.amount)}`);
+    const checkpointB = res.summaryLines[2].amount + res.summaryLines.slice(3, -1).reduce((s, l) => s + (l.sign === 'Add' ? l.amount : l.sign === 'Less' ? -l.amount : 0), 0);
+    ck('Balaji r3: check point (Difference + Σ signed lines) = 0', Math.abs(checkpointB) < 1, fmt(checkpointB));
   }
 
   console.log(`\n==== ${pass} passed, ${fail} failed ====`);

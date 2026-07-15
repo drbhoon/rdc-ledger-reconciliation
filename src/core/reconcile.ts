@@ -266,7 +266,25 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   const summaryLines = buildSummary(rdc, customer, [...unmatchedRdc, ...unmatchedCustomer, ...outsidePeriodCustomer], netZeroReversals, options, matches);
   const rdcGap = ledgerIntegrityGap(rdc);
   const custGap = ledgerIntegrityGap(customer);
-  const cards = { matchedCount: matches.length, possibleCount: possibleMatches.length, unmatchedRdcCount: unmatchedRdc.length, unmatchedCustomerCount: unmatchedCustomer.length, outsidePeriodCustomerCount: outsidePeriodCustomer.length, netZeroReversalCount: netZeroReversals.length, journalEntriesConsidered: journalEntries.length, tdsExceptionCount: tdsCompare.filter(t => t.matchStatus !== 'MATCHED').length, unexplainedDifference: summaryLines.at(-1)?.amount || 0, rdcLedgerIntegrityGap: Math.round((rdcGap || 0) * 100) / 100, customerLedgerIntegrityGap: Math.round((custGap || 0) * 100) / 100 };
+  // ── Per-run accuracy certificate (the production accuracy metric) ────────
+  // A reconciliation is CERTIFIED when it is arithmetically airtight:
+  //  1. both ledgers' parsed rows tie to their own stated closing balance
+  //     (integrity gap within tolerance) — nothing was misread or missed;
+  //  2. the reconciliation statement fully explains the RDC↔customer
+  //     difference (unexplained difference within tolerance).
+  // "Accuracy" is then measured, per run and across a sample, as the % of
+  // runs certified. Anything not certified is flagged REVIEW REQUIRED rather
+  // than presented as a finished reconciliation.
+  const unexplained = summaryLines.at(-1)?.amount || 0;
+  const rdcTied = rdcGap == null || Math.abs(rdcGap) <= 1;
+  const custTied = custGap == null || Math.abs(custGap) <= 1;
+  const explained = Math.abs(unexplained) <= 1;
+  const rdcVolume = rdc.transactions.reduce((s, t) => s + Math.abs(t.signedAmountRdcView), 0);
+  const matchedVolume = matches.reduce((s, m) => s + Math.abs(m.rdcAmount || 0), 0);
+  const matchedCoveragePct = rdcVolume > 0 ? Math.round((matchedVolume / rdcVolume) * 10000) / 100 : 0;
+  const certified = rdcTied && custTied && explained;
+  const verdict = certified ? 'CERTIFIED' : 'REVIEW REQUIRED';
+  const cards = { matchedCount: matches.length, possibleCount: possibleMatches.length, unmatchedRdcCount: unmatchedRdc.length, unmatchedCustomerCount: unmatchedCustomer.length, outsidePeriodCustomerCount: outsidePeriodCustomer.length, netZeroReversalCount: netZeroReversals.length, journalEntriesConsidered: journalEntries.length, tdsExceptionCount: tdsCompare.filter(t => t.matchStatus !== 'MATCHED').length, unexplainedDifference: unexplained, rdcLedgerIntegrityGap: Math.round((rdcGap || 0) * 100) / 100, customerLedgerIntegrityGap: Math.round((custGap || 0) * 100) / 100, matchedCoveragePct, certified, verdict };
   if (rdcGap != null && Math.abs(rdcGap) > 1) rdc.parserLog.push({ sourceFile: rdc.transactions[0]?.sourceFile || 'rdc', level: 'error', message: `RDC ledger integrity check FAILED: parsed rows differ from stated closing balance by ${rdcGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });
   if (custGap != null && Math.abs(custGap) > 1) customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'error', message: `Customer ledger integrity check FAILED: parsed rows differ from stated closing balance by ${custGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });
   return { options, rdc, customer: { ...customer, transactions: activeCustomer }, matches, possibleMatches, unmatchedRdc, unmatchedCustomer, outsidePeriodCustomer, netZeroReversals: [...netZeroReversals, ...rdcReversalNetted], tdsCompare, journalEntries, openingClosing, summaryLines, parserLog: [...rdc.parserLog, ...customer.parserLog], cards };

@@ -90,6 +90,12 @@ export async function parsePdfFile(filePath: string, sourceSide: PdfSide = 'CUST
     fin002.parserLog.unshift(...parserLog);
     return fin002;
   }
+  // Runs on the PLAIN vertical text (this format's rows are one token per line).
+  const running = parseRunningBalancePdfLedger(lines, sourceFile, sourceSide);
+  if (running.transactions.length) {
+    running.parserLog.unshift(...parserLog);
+    return running;
+  }
   const tally = parseTallyPdfLedger(lines, sourceFile, sourceSide);
   if (tally.transactions.length || tally.balances.opening || tally.balances.closing) {
     tally.parserLog.unshift(...parserLog);
@@ -415,6 +421,73 @@ function parseCompactRdcPdf(lines: string[], sourceFile: string, balances: Parse
     transactions.push(makePdfTxn({ sourceSide: 'RDC', sourceFile, sourceRow: i + 1, date: parseDate(dateText), voucherType, voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo), extractedReferences: refs, chequeNo: extractChequeNo([line]), particulars: docType, narration: line, debit, credit, signedAmountRdcView: signedFromDebitCredit('RDC', debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: refs.length || docType === 'REC' ? 82 : 70, parserNotes: ['RDC compact PDF row'] }));
   }
   return transactions;
+}
+
+/**
+ * Running-balance Tally ledger (e.g. Elite): header
+ * `Date V.Type Voucher No Particulars Bill No Cheque No Debit Credit Balance Cost Centre`.
+ * Rows start with `03 Apr 2024` and carry a Debit/Credit/Balance money trio
+ * followed by Dr|Cr, with trailing cost-centre text after it. Amounts read
+ * from the trio (deterministic); balances taken from Opening/Closing rows so
+ * the parsed rows tie to the stated closing balance.
+ */
+function parseRunningBalancePdfLedger(lines: string[], sourceFile: string, sourceSide: PdfSide): ParseResult {
+  const balances: ParseResult['balances'] = { openingRows: [], closingRows: [] };
+  const parserLog: ParseResult['parserLog'] = [];
+  const MONEY = /^-?\d[\d,]*\.\d{2}$/;
+  const BAL = /^(-?\d[\d,]*\.\d{2})\s+(Cr|Dr)$/i;              // "13802008.87 Cr"
+  const DATE_ONLY = /^\d{1,2}\s+[A-Za-z]{3}\s+\d{4}$/;
+  // Signature: this vertical layout scatters each row across lines but always
+  // ends a transaction with a "<amount> Cr|Dr" balance line; require enough of
+  // them plus many date-only lines so we don't hijack another format.
+  const balLines = lines.filter(l => BAL.test(l)).length;
+  const dateLines = lines.filter(l => DATE_ONLY.test(l)).length;
+  if (balLines < 10 || dateLines < 10) return { transactions: [], balances, parserLog };
+
+  const bal = (debit: number, credit: number) => signedFromDebitCredit(sourceSide, debit, credit);
+  const transactions: NormalizedTxn[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const bm = lines[i].match(BAL);
+    if (!bm) continue;
+    const balance = moneyValue(bm[1]) * (/cr/i.test(bm[2]) ? 1 : -1);
+    // The two lines directly above the balance are Credit then Debit.
+    if (!(MONEY.test(lines[i - 1] || '') && MONEY.test(lines[i - 2] || ''))) continue;
+    const credit = moneyValue(lines[i - 1]);
+    const debit = moneyValue(lines[i - 2]);
+    // Nearest date-only line above = this row's transaction date.
+    let d = i - 3;
+    while (d >= 0 && !DATE_ONLY.test(lines[d])) d--;
+    if (d < 0) continue;
+    const chunk = lines.slice(d, i + 1);
+    const chunkText = chunk.join(' | ');
+    if (/opening balance/i.test(chunkText)) { balances.opening = balance; continue; }
+    if (/closing balance/i.test(chunkText)) { balances.closing = balance; continue; }
+    if (!debit && !credit) continue;
+
+    const vType = (lines[d + 1] || '').trim();          // BP / JV / PV / 0 …
+    const voucherNo = (lines[d + 2] || '').trim();
+    const particulars = (lines[d + 3] || '').trim();
+    // Narration + bill/cheque lines sit between particulars and the debit line.
+    const narration = lines.slice(d + 3, i - 2).join(' | ');
+    const refs = extractReferences([particulars, narration]);
+    const v = vType.toUpperCase();
+    const isTds = /tds|194q|194c/i.test(narration);
+    const isPayment = v === 'BP' || v === 'BR' || /payment|receipt|bank|paid to rdc/i.test(narration);
+    const voucherType: VoucherType = isTds ? (v === 'JV' ? 'JOURNAL_TDS' : 'TDS')
+      : isPayment ? 'PAYMENT'
+      : /^(JV|CN|DN)$/i.test(v) ? (credit > 0 ? 'JOURNAL_INVOICE' : 'JOURNAL_ADJUSTMENT')
+      : (credit > 0 || refs.length) ? 'INVOICE' : 'OTHER';
+    transactions.push(makePdfTxn({
+      sourceSide, sourceFile, sourceRow: d + 1, date: parseDate(lines[d]), voucherType,
+      voucherNo, referenceNo: refs[0] || '', normalizedReferenceNo: normalizeReference(refs[0] || ''),
+      extractedReferences: refs, chequeNo: extractChequeNo([narration]), allocationType: 'Inferred',
+      particulars: particulars.slice(0, 160), narration: narration.slice(0, 400), debit, credit,
+      signedAmountRdcView: bal(debit, credit), amountOriginalSign: debit ? 'Dr' : 'Cr',
+      parseConfidence: refs.length ? 84 : 74, parserNotes: ['Running-balance Tally ledger row (vertical)'],
+    }));
+  }
+  parserLog.push({ sourceFile, level: 'info', message: `Parsed ${transactions.length} running-balance Tally ledger rows`, confidence: transactions.length ? 82 : 45 });
+  return { transactions, balances, parserLog };
 }
 
 /**

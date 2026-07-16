@@ -1,6 +1,9 @@
-import { normalizeReference } from '../core/reference';
+import { v4 as uuid } from 'uuid';
+import { extractChequeNo, extractReferences, normalizeReference } from '../core/reference';
+import { parseAmount, signedFromDebitCredit } from '../core/amount';
+import { parseDate } from '../core/date';
 import type { MatchRow, NormalizedTxn, ParseResult, ReconcileResult, VoucherType } from '../core/types';
-import { emptyAiUsage, getAiConfig, type AiConfig } from '../core/aiConfig';
+import { addAiRunUsage, emptyAiUsage, getAiConfig, type AiConfig } from '../core/aiConfig';
 
 type JsonSchema = Record<string, unknown>;
 
@@ -69,6 +72,9 @@ async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, c
         },
       },
     }), config.requestTimeoutMs, name);
+    // Exact token accounting for the per-run cost line on the certificate.
+    const u: any = (response as any).usage;
+    if (u) addAiRunUsage(u.input_tokens ?? u.prompt_tokens ?? 0, u.output_tokens ?? u.completion_tokens ?? 0);
     return JSON.parse(response.output_text) as T;
   } catch (error) {
     console.error(`[ai] ${name} failed; continuing deterministic reconciliation`, error);
@@ -323,6 +329,115 @@ function addAiCards(result: ReconcileResult, usage: ReturnType<typeof emptyAiUsa
   result.cards.aiPossibleMatchesSuggested = usage.possibleMatchesSuggested;
   result.cards.aiAutoAccepted = usage.autoAccepted;
   result.cards.aiRequiresHumanReview = usage.requiresHumanReview;
+}
+
+// ── AI rescue parser (unknown-format insurance) ──────────────────────────────
+// When the deterministic parsers cannot read a ledger (0 rows) or misread it
+// (large integrity gap), the raw text is sent to the model chunk-by-chunk with
+// a strict row schema. The result is accepted ONLY if it ties to the stated
+// closing balance better than the deterministic attempt — the certificate
+// remains the gatekeeper, so the AI can rescue but never degrade.
+
+export type AiLedgerRow = {
+  date: string;
+  voucherType: 'INVOICE' | 'RECEIPT' | 'PAYMENT' | 'CREDIT_NOTE' | 'DEBIT_NOTE' | 'TDS' | 'JOURNAL_INVOICE' | 'JOURNAL_TDS' | 'JOURNAL_ADJUSTMENT' | 'OPENING' | 'CLOSING' | 'OTHER';
+  voucherNo: string;
+  reference: string;
+  narration: string;
+  debit: number;
+  credit: number;
+};
+
+const rescueSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    rows: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          date: { type: 'string' },
+          voucherType: { type: 'string', enum: ['INVOICE', 'RECEIPT', 'PAYMENT', 'CREDIT_NOTE', 'DEBIT_NOTE', 'TDS', 'JOURNAL_INVOICE', 'JOURNAL_TDS', 'JOURNAL_ADJUSTMENT', 'OPENING', 'CLOSING', 'OTHER'] },
+          voucherNo: { type: 'string' },
+          reference: { type: 'string' },
+          narration: { type: 'string' },
+          debit: { type: 'number' },
+          credit: { type: 'number' },
+        },
+        required: ['date', 'voucherType', 'voucherNo', 'reference', 'narration', 'debit', 'credit'],
+      },
+    },
+  },
+  required: ['rows'],
+};
+
+/** Pure conversion of AI-extracted rows into a ParseResult (unit-testable). */
+export function aiRowsToParseResult(rows: AiLedgerRow[], sourceFile: string, sourceSide: 'RDC' | 'CUSTOMER'): ParseResult {
+  const balances: ParseResult['balances'] = { openingRows: [], closingRows: [] };
+  const transactions: NormalizedTxn[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const debit = Math.abs(parseAmount(r.debit));
+    const credit = Math.abs(parseAmount(r.credit));
+    const signed = signedFromDebitCredit(sourceSide, debit, credit);
+    if (r.voucherType === 'OPENING') { if (balances.opening == null) balances.opening = signed; continue; }
+    if (r.voucherType === 'CLOSING') { balances.closing = signed; continue; }
+    if (!debit && !credit) continue;
+    // de-dupe rows that chunk boundaries may have produced twice
+    const key = [r.date, r.voucherNo, r.reference, debit, credit].join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const refs = extractReferences([r.reference, r.narration]);
+    const referenceNo = refs[0] || (r.reference || '').trim();
+    transactions.push({
+      id: uuid(),
+      sourceSide, sourceFile, sourceRow: transactions.length + 1,
+      date: parseDate(r.date), voucherType: r.voucherType as VoucherType,
+      voucherNo: r.voucherNo, referenceNo,
+      normalizedReferenceNo: normalizeReference(referenceNo),
+      extractedReferences: refs, chequeNo: extractChequeNo([r.narration]),
+      allocationType: 'Inferred',
+      particulars: (r.narration || '').slice(0, 160), narration: (r.narration || '').slice(0, 400),
+      debit, credit, signedAmountRdcView: signed,
+      amountOriginalSign: debit ? 'Dr' : 'Cr',
+      parseConfidence: 70,
+      parserNotes: ['AI-extracted row (rescue parser)'],
+    });
+  }
+  return { transactions, balances, parserLog: [] };
+}
+
+export async function aiRescueParse(rawText: string, sourceFile: string, sourceSide: 'RDC' | 'CUSTOMER', config = getAiConfig()): Promise<ParseResult | undefined> {
+  if (!config.enabled || !rawText.trim()) return undefined;
+  const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const CHUNK = 90;
+  const chunks: string[] = [];
+  for (let i = 0; i < lines.length && chunks.length < config.rescueMaxChunks; i += CHUNK) {
+    chunks.push(lines.slice(i, i + CHUNK).join('\n'));
+  }
+  const truncated = lines.length > config.rescueMaxChunks * CHUNK;
+  const all: AiLedgerRow[] = [];
+  let failed = 0;
+  await mapLimit(chunks.map((c, idx) => ({ c, idx })), config.concurrency, async ({ c, idx }) => {
+    const out = await strictJson<{ rows: AiLedgerRow[] }>('ledger_rescue_extraction', rescueSchema, {
+      task: 'Extract EVERY transaction row from this Indian accounting ledger text chunk. One output row per ledger transaction. Amounts as plain numbers. Include Opening/Closing Balance rows with voucherType OPENING/CLOSING. Skip page headers, column headers, totals and carried-forward lines.',
+      sourceSide,
+      chunkIndex: idx,
+      text: c,
+    }, config);
+    if (out?.rows) all.push(...out.rows);
+    else failed += 1;
+  });
+  if (!all.length) return undefined;
+  const result = aiRowsToParseResult(all, sourceFile, sourceSide);
+  result.parserLog.push({
+    sourceFile, level: 'warn',
+    message: `AI rescue parser extracted ${result.transactions.length} rows from ${chunks.length} chunks${failed ? ` (${failed} chunks failed)` : ''}${truncated ? ' — document truncated at chunk cap' : ''}; verify via the certificate`,
+    confidence: 70,
+  });
+  return result;
 }
 
 function slimMatch(row: MatchRow) {

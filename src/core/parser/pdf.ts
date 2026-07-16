@@ -34,7 +34,7 @@ type PdfSide = 'RDC' | 'CUSTOMER';
  * from fusing into one token — the root cause of amounts like 4,501.70 being
  * read as 14,501.70.
  */
-async function extractSpacedText(buffer: Buffer): Promise<string> {
+export async function extractSpacedText(buffer: Buffer): Promise<string> {
   const render = (pageData: any) =>
     pageData.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false }).then((tc: any) => {
       type Item = { str: string; x: number; y: number; w: number };

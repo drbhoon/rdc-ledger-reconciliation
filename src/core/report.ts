@@ -76,6 +76,15 @@ function addCertificate(wb: ExcelJS.Workbook, result: ReconcileResult) {
   ws.addRow(['Matched entries', Number(c.matchedCount)]);
   ws.addRow(['Unmatched (RDC / Customer)', `${Number(c.unmatchedRdcCount)} / ${Number(c.unmatchedCustomerCount)}`]);
   ws.addRow(['Needs human review (possible matches)', Number(c.possibleCount)]);
+  const ai = result.aiUsage;
+  if (ai?.enabled) {
+    ws.addRow([]);
+    ws.addRow(['AI model', ai.model]);
+    ws.addRow(['AI tokens (input / output)', `${(ai.inputTokens ?? 0).toLocaleString('en-IN')} / ${(ai.outputTokens ?? 0).toLocaleString('en-IN')}`]);
+    const usd = ai.estimatedCostUsd ?? 0;
+    ws.addRow(['Estimated AI cost of this run', `$${usd.toFixed(4)}  (~₹${(usd * 87).toFixed(2)})`]);
+    if (ai.rescueRowsExtracted) ws.addRow(['AI rescue-parsed rows (verify via checks above)', ai.rescueRowsExtracted]);
+  }
   ws.addRow([]);
   const note = ws.addRow([certified
     ? 'CERTIFIED: both ledgers parsed completely and the statement reconciles to within ₹1. Safe to rely on.'

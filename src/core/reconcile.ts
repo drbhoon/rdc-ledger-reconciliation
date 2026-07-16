@@ -102,7 +102,7 @@ function deriveMissingOpening(side: ParseResult, label: string) {
 }
 
 /** opening + Σ(signed txns) − closing; ≈0 when parsing captured every row correctly. */
-function ledgerIntegrityGap(side: ParseResult): number | undefined {
+export function ledgerIntegrityGap(side: ParseResult): number | undefined {
   if (side.balances.closing == null) return undefined;
   const total = side.transactions.reduce((s, t) => s + t.signedAmountRdcView, side.balances.opening || 0);
   return total - side.balances.closing;

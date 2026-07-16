@@ -64,5 +64,9 @@ export type AiUsageStats = {
   possibleMatchesSuggested: number;
   autoAccepted: number;
   requiresHumanReview: number;
+  rescueRowsExtracted?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  estimatedCostUsd?: number;
 };
 export type ReconcileResult = { options: ReconcileOptions; rdc: ParseResult; customer: ParseResult; matches: MatchRow[]; possibleMatches: MatchRow[]; unmatchedRdc: MatchRow[]; unmatchedCustomer: MatchRow[]; outsidePeriodCustomer: MatchRow[]; netZeroReversals: NormalizedTxn[]; tdsCompare: MatchRow[]; journalEntries: NormalizedTxn[]; openingClosing: MatchRow[]; summaryLines: SummaryLine[]; parserLog: ParserLogRow[]; cards: Record<string, number | boolean | string>; aiUsage?: AiUsageStats };

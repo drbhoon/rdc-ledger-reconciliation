@@ -3,7 +3,7 @@ import { extractChequeNo, extractReferences, normalizeReference } from '../core/
 import { parseAmount, signedFromDebitCredit } from '../core/amount';
 import { parseDate } from '../core/date';
 import type { MatchRow, NormalizedTxn, ParseResult, ReconcileResult, VoucherType } from '../core/types';
-import { addAiRunUsage, emptyAiUsage, getAiConfig, type AiConfig } from '../core/aiConfig';
+import { addAiRunUsage, aiCallAllowed, emptyAiUsage, getAiConfig, recordAiCallFailure, recordAiCallSuccess, type AiConfig } from '../core/aiConfig';
 
 type JsonSchema = Record<string, unknown>;
 
@@ -51,11 +51,20 @@ async function client(config = getAiConfig()) {
 }
 
 async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, config = getAiConfig()): Promise<T | undefined> {
+  // Run-level guardrails: once the time budget is spent or the circuit
+  // breaker has tripped, every remaining call returns instantly so the
+  // request can never outlive the hosting proxy's timeout.
+  if (!aiCallAllowed()) return undefined;
   try {
     const openai = await client(config);
     if (!openai) return undefined;
+    // Reasoning models (gpt-5*, o*) default to a slow reasoning pass that
+    // regularly blows past the per-call timeout; extraction tasks only need
+    // low effort.
+    const isReasoningModel = /^(gpt-5|o\d)/i.test(config.model);
     const response = await withTimeout(openai.responses.create({
       model: config.model,
+      ...(isReasoningModel ? { reasoning: { effort: 'low' as const } } : {}),
       instructions: [
         'You are an expert Indian accounting ledger reconciliation assistant for RDC customer/vendor ledger reconciliation.',
         'Respect this sign convention: RDC debit to customer is positive receivable; RDC credit is negative. In customer books, credit to RDC is positive in RDC receivable view and debit to RDC is negative.',
@@ -71,12 +80,14 @@ async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, c
           schema,
         },
       },
-    }), config.requestTimeoutMs, name);
+    }, { timeout: config.requestTimeoutMs, maxRetries: 0 }), config.requestTimeoutMs + 10_000, name);
     // Exact token accounting for the per-run cost line on the certificate.
     const u: any = (response as any).usage;
     if (u) addAiRunUsage(u.input_tokens ?? u.prompt_tokens ?? 0, u.output_tokens ?? u.completion_tokens ?? 0);
+    recordAiCallSuccess();
     return JSON.parse(response.output_text) as T;
   } catch (error) {
+    recordAiCallFailure();
     console.error(`[ai] ${name} failed; continuing deterministic reconciliation`, error);
     return undefined;
   }

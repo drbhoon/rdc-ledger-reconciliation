@@ -6,7 +6,7 @@
  * Run: npx tsx scripts/validate-rescue.ts
  */
 import { aiRowsToParseResult, type AiLedgerRow } from '../src/services/aiLedgerService';
-import { estimateCostUsd } from '../src/core/aiConfig';
+import { aiCallAllowed, estimateCostUsd, getAiConfig, getAiRunState, recordAiCallFailure, recordAiCallSuccess, startAiRun } from '../src/core/aiConfig';
 import { ledgerIntegrityGap } from '../src/core/reconcile';
 
 let pass = 0, fail = 0;
@@ -40,6 +40,21 @@ ck('cost: gpt-5-mini 1M in + 100k out = $0.45', Math.abs(estimateCostUsd('gpt-5-
 ck('cost: gpt-4.1-mini 65k in + 12k out ≈ $0.045', Math.abs(estimateCostUsd('gpt-4.1-mini', 65_000, 12_000) - 0.0452) < 0.001, String(estimateCostUsd('gpt-4.1-mini', 65_000, 12_000)));
 ck('cost: gpt-5 pricing distinct from gpt-5-mini', estimateCostUsd('gpt-5', 1_000_000, 0) === 1.25, String(estimateCostUsd('gpt-5', 1_000_000, 0)));
 ck('cost: unknown model falls back to default', estimateCostUsd('mystery-model', 1_000_000, 0) === 1.0);
+
+// ── run guardrails (time budget + circuit breaker) ───────────────────────────
+const cfg = getAiConfig();
+startAiRun({ ...cfg, timeBudgetMs: 60_000 });
+ck('guard: calls allowed within budget', aiCallAllowed() === true);
+for (let i = 0; i < 6; i++) recordAiCallFailure();
+ck('guard: breaker trips after 6 consecutive failures', getAiRunState().tripped === true);
+ck('guard: tripped breaker blocks further calls', aiCallAllowed() === false);
+startAiRun({ ...cfg, timeBudgetMs: 60_000 });
+for (let i = 0; i < 5; i++) recordAiCallFailure();
+recordAiCallSuccess();
+recordAiCallFailure();
+ck('guard: a success resets the failure streak', getAiRunState().tripped === false && aiCallAllowed() === true);
+startAiRun({ ...cfg, timeBudgetMs: 0 });
+ck('guard: exhausted time budget blocks calls', aiCallAllowed() === false && getAiRunState().budgetExhausted === true, `skipped=${getAiRunState().skippedCalls}`);
 
 console.log(`\n==== ${pass} passed, ${fail} failed ====`);
 process.exit(fail ? 1 : 0);

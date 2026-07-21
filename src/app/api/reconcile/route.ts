@@ -5,7 +5,7 @@ import { v4 as uuid } from 'uuid';
 import { extractRawText, parseLedger } from '@/core/parser';
 import { ledgerIntegrityGap, reconcile } from '@/core/reconcile';
 import { writeReport } from '@/core/report';
-import { emptyAiUsage, estimateCostUsd, getAiConfig, getAiRunUsage, resetAiRunUsage, type AiConfig } from '@/core/aiConfig';
+import { emptyAiUsage, estimateCostUsd, getAiConfig, getAiRunState, getAiRunUsage, startAiRun, type AiConfig } from '@/core/aiConfig';
 import { aiEnhanceParseResult, aiEnhanceReconciliation, aiRescueParse } from '@/services/aiLedgerService';
 import type { ParseResult } from '@/core/types';
 
@@ -82,7 +82,7 @@ export async function POST(req: Request) {
     const customerPath = await saveUpload(customerFile, uploads);
     console.log(`[reconcile] ${runId} parsing`, { partyName, rdcFile: rdcFile.name, customerFile: customerFile.name });
     const aiConfig = getAiConfig();
-    resetAiRunUsage();
+    startAiRun(aiConfig);
     let rdc = await parseLedger(rdcPath, 'RDC');
     let customer = await parseLedger(customerPath, 'CUSTOMER');
     // Unknown-format insurance (0 rows or big integrity gap -> AI rescue).
@@ -117,6 +117,15 @@ export async function POST(req: Request) {
     result.cards.aiInputTokens = tokens.input;
     result.cards.aiOutputTokens = tokens.output;
     result.cards.aiEstimatedCostUsd = aiUsage.estimatedCostUsd;
+    const aiState = getAiRunState();
+    if (aiConfig.enabled && (aiState.tripped || aiState.skippedCalls > 0)) {
+      const reason = aiState.tripped
+        ? 'repeated AI call failures (circuit breaker) — check OPENAI_API_KEY / OPENAI_MODEL access'
+        : 'AI time budget reached (AI_TIME_BUDGET_MS)';
+      result.cards.aiCallsSkipped = aiState.skippedCalls;
+      result.parserLog.push({ sourceFile: 'AI', level: 'warn', message: `AI review stopped early: ${reason}; ${aiState.skippedCalls} calls skipped. Deterministic reconciliation is complete and unaffected.`, confidence: 100 });
+      console.warn(`[reconcile] ${runId} AI stopped early: ${reason}; skipped ${aiState.skippedCalls} calls`);
+    }
     const reportsDir = path.join(process.cwd(), 'reports');
     fs.mkdirSync(reportsDir, { recursive: true });
     const reportPath = path.join(reportsDir, runId + '_reconciliation.xlsx');

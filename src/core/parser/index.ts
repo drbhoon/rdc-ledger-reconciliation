@@ -27,7 +27,8 @@ export async function extractRawText(filePath: string): Promise<string> {
     }
   }
   const XLSX = await import('xlsx');
-  const wb = XLSX.read(fs.readFileSync(filePath), { cellDates: true, type: 'buffer' });
+  // raw:true for CSV keeps original date strings (see parseExcelFile).
+  const wb = XLSX.read(fs.readFileSync(filePath), /\.csv$/i.test(filePath) ? { type: 'buffer', raw: true } : { cellDates: true, type: 'buffer' });
   const out: string[] = [];
   for (const sheetName of wb.SheetNames) {
     const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], { header: 1, defval: '', raw: false });

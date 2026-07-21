@@ -50,6 +50,26 @@ function classifyRdc(doc: string, narration: string, debit: number, credit: numb
   if (/rec|receipt|payment|bank/.test(t) || credit > 0) return 'RECEIPT';
   return 'OTHER';
 }
+function classifyVendorMirror(doc: string, narration: string, debit: number, credit: number): VoucherType {
+  // Customer's VENDOR ledger of RDC (payable view) exported in the same ERP
+  // column layout as RDC's own debtors export — but mirrored: RDC bills are
+  // CREDITS, payments to RDC are DEBITS (e.g. Balajee Infratech Jan-2026).
+  const d = doc.trim().toUpperCase();
+  const DOC_MAP: Record<string, VoucherType> = {
+    INV: 'INVOICE', REC: 'PAYMENT', REV: 'PAYMENT', CM: 'CREDIT_NOTE',
+    CN: 'CREDIT_NOTE', DM: 'DEBIT_NOTE', DN: 'DEBIT_NOTE', TDS: 'TDS',
+  };
+  if (DOC_MAP[d]) return DOC_MAP[d];
+  const t = (doc + ' ' + narration).toLowerCase();
+  if (/opening/.test(t)) return 'OPENING';
+  if (/closing/.test(t)) return 'CLOSING';
+  if (/tds|194q|194c|tax deducted/.test(t)) return 'TDS';
+  if (/credit note|credit memo|arcm|armn/.test(t)) return 'CREDIT_NOTE';
+  if (/debit note|debit memo/.test(t)) return 'DEBIT_NOTE';
+  if (/payment|paid|neft|rtgs|\bcms\b|cheque|\bchq\b/.test(t) || (debit > 0 && !credit)) return 'PAYMENT';
+  if (/bill booked|invoice|purchase|\binv\b/.test(t) || credit > 0) return 'INVOICE';
+  return 'OTHER';
+}
 function classifyCustomer(vch: string, particulars: string, debit: number, credit: number, refs: string[]): VoucherType {
   const t = (vch + ' ' + particulars + ' ' + refs.join(' ')).toLowerCase();
   if (/opening/.test(t)) return 'OPENING';
@@ -69,7 +89,12 @@ function classifyCustomer(vch: string, particulars: string, debit: number, credi
 }
 function buildTxn(partial: Omit<NormalizedTxn, 'id'>): NormalizedTxn { return { id: uuid(), ...partial }; }
 export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTOMER'): ParseResult {
-  const wb = XLSX.read(fs.readFileSync(filePath), { cellDates: true, type: 'buffer' });
+  // CSV: keep every cell as its original string (raw:true). SheetJS would
+  // otherwise date-detect strings like "05/01/2026" with US month-first order
+  // and render 2-digit years as year 0026 — parseDate handles the real text
+  // (dd/MM/yyyy, dd-MMM-yy) correctly.
+  const isCsv = /\.csv$/i.test(filePath);
+  const wb = XLSX.read(fs.readFileSync(filePath), isCsv ? { type: 'buffer', raw: true } : { cellDates: true, type: 'buffer' });
   const transactions: NormalizedTxn[] = [];
   const parserLog: ParserLogRow[] = [];
   const balances: ParseResult['balances'] = { openingRows: [], closingRows: [] };
@@ -79,15 +104,17 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
     const rows = XLSX.utils.sheet_to_json<Row>(ws, { defval: '', raw: false, range: headerRowIndex(ws) });
     if (!rows.length) continue;
     const kind = sourceSideHint === 'RDC' ? 'RDC' : sourceSideHint === 'CUSTOMER' ? detect(rows) : detect(rows);
-    parserLog.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: 'Detected ' + kind + ' ledger layout', confidence: 90 });
-    if (kind === 'RDC') parseRdcRows(rows, sourceFile, sheetName, transactions, balances, parserLog);
+    const side = sourceSideHint === 'CUSTOMER' ? 'CUSTOMER' : 'RDC';
+    parserLog.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: 'Detected ' + kind + ' ledger layout' + (kind === 'RDC' && side === 'CUSTOMER' ? ' (customer vendor-ledger mirror: bills=Cr, payments=Dr)' : ''), confidence: 90 });
+    if (kind === 'RDC') parseRdcRows(rows, sourceFile, sheetName, transactions, balances, parserLog, side);
     else parseCustomerRows(rows, sourceFile, sheetName, transactions, balances, parserLog);
   }
   return { transactions, balances, parserLog };
 }
-function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[]) {
+function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[], side: 'RDC' | 'CUSTOMER' = 'RDC') {
   for (const row of rows) {
     const docType = String(pick(row, ['Doc Type','Voucher Type']) ?? '');
+    const voucherNo = String(pick(row, ['Inv / Receipt Number','Voucher No']) ?? '');
     const particulars = [pick(row, ['Narration','Particular','Customer Name','Plant Name','Transaction Type']), Object.values(row).find(v => /Opening Balance|Closing Balance/i.test(String(v)))].filter(Boolean).join(' | ');
     const date = parseDate(pick(row, ['Inv/ Receipt Date','Date','Voucher Date']));
     const debit = absAmount(pick(row, ['Tran Dr Amt','Debit','Dr']));
@@ -95,7 +122,13 @@ function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out:
     if (!date && !debit && !credit && !particulars && !docType) continue;
     const refs = extractReferences([particulars, String(pick(row, ['GST Inv Number','Inv / Receipt Number','Bill No','Reference']) ?? '')]);
     const referenceNo = String(pick(row, ['GST Inv Number','Bill No','Reference','Inv / Receipt Number']) ?? refs[0] ?? '').trim();
-    const voucherType = classifyRdc(docType, particulars + ' ' + referenceNo, debit, credit);
+    // A customer's vendor ledger in this same layout is the MIRROR of RDC's
+    // export: bills sit in the credit column, payments in the debit column,
+    // and the row label ("Bill Booked" / "Payment Made ...") lives in the
+    // Inv / Receipt Number column.
+    const voucherType = side === 'RDC'
+      ? classifyRdc(docType, particulars + ' ' + referenceNo, debit, credit)
+      : classifyVendorMirror(docType, [voucherNo, particulars, referenceNo].join(' '), debit, credit);
     // Summary rows: the label often sits in an unmapped column (e.g. "Grand
     // Total" under Document Seq Number), so scan EVERY cell — a missed total
     // row double-counts the entire ledger.
@@ -104,7 +137,7 @@ function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out:
       log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: 'Skipped total row' });
       continue;
     }
-    const txn = buildTxn({ sourceSide: 'RDC', sourceFile, sourceSheet, sourceRow: row.__rowNum__, date, voucherType, voucherNo: String(pick(row, ['Inv / Receipt Number','Voucher No']) ?? ''), referenceNo, normalizedReferenceNo: normalizeReference(referenceNo || refs[0]), extractedReferences: refs, chequeNo: extractChequeNo([particulars, referenceNo]), particulars, narration: particulars, debit, credit, signedAmountRdcView: signedFromDebitCredit('RDC', debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: hasTruncatedReference([particulars, referenceNo]) ? 60 : 90, parserNotes: [] });
+    const txn = buildTxn({ sourceSide: side, sourceFile, sourceSheet, sourceRow: row.__rowNum__, date, voucherType, voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo || refs[0]), extractedReferences: refs, chequeNo: extractChequeNo([particulars, voucherNo, referenceNo]), particulars: [voucherNo, particulars].filter(Boolean).join(' | '), narration: [voucherNo, particulars].filter(Boolean).join(' | '), debit, credit, signedAmountRdcView: signedFromDebitCredit(side, debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: hasTruncatedReference([particulars, referenceNo]) ? 60 : 90, parserNotes: [] });
     if (voucherType === 'OPENING') { balances.opening = txn.signedAmountRdcView; balances.openingRows?.push(txn); continue; }
     if (voucherType === 'CLOSING') { balances.closing = txn.signedAmountRdcView; balances.closingRows?.push(txn); continue; }
     out.push(txn);

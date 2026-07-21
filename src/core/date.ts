@@ -7,13 +7,15 @@ export function parseDate(value: unknown): string | undefined {
   }
   const s = String(value ?? '').trim();
   if (!s) return undefined;
-  const formats = ['dd-MMM-yy','dd-MMM-yyyy','dd/MM/yyyy','d/M/yyyy','dd-MM-yyyy','d-M-yyyy','yyyy-MM-dd','dd.MM.yyyy'];
+  const formats = ['dd-MMM-yy','dd-MMM-yyyy','dd/MM/yyyy','d/M/yyyy','dd/MM/yy','d/M/yy','dd-MM-yyyy','d-M-yyyy','dd-MM-yy','yyyy-MM-dd','dd.MM.yyyy'];
   for (const f of formats) {
     const d = parse(s, f, new Date());
-    if (isValid(d)) return format(d, 'yyyy-MM-dd');
+    // A yyyy pattern happily consumes a 2-digit year ("26" -> year 0026);
+    // reject implausible years so the matching 2-digit format gets its turn.
+    if (isValid(d) && d.getFullYear() >= 1990) return format(d, 'yyyy-MM-dd');
   }
   const d = new Date(s);
-  return isValid(d) ? format(d, 'yyyy-MM-dd') : undefined;
+  return isValid(d) && d.getFullYear() >= 1990 ? format(d, 'yyyy-MM-dd') : undefined;
 }
 export function daysBetween(a?: string, b?: string) {
   if (!a || !b) return 999999;

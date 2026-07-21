@@ -333,8 +333,14 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   const rdcVolume = rdc.transactions.reduce((s, t) => s + Math.abs(t.signedAmountRdcView), 0);
   const matchedVolume = matches.reduce((s, m) => s + Math.abs(m.rdcAmount || 0), 0);
   const matchedCoveragePct = rdcVolume > 0 ? Math.round((matchedVolume / rdcVolume) * 10000) / 100 : 0;
-  const certified = rdcTied && custTied && explained;
+  // Zero matches across two populated ledgers is a parsing/orientation
+  // failure, not a finished reconciliation — it can still be arithmetically
+  // self-consistent (everything dumped into Add/Less buckets), so it must be
+  // blocked from certification explicitly ("never confidently wrong").
+  const nothingMatched = matches.length === 0 && rdc.transactions.length >= 10 && customer.transactions.length >= 10;
+  const certified = rdcTied && custTied && explained && !nothingMatched;
   const verdict = certified ? 'CERTIFIED' : 'REVIEW REQUIRED';
+  if (nothingMatched) customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'error', message: 'Certification blocked: ZERO rows matched between the two ledgers — this points to a format/orientation parsing problem, not a genuine reconciliation. Review both ledgers.', confidence: 0 });
   const cards = { matchedCount: matches.length, possibleCount: possibleMatches.length, unmatchedRdcCount: unmatchedRdc.length, unmatchedCustomerCount: unmatchedCustomer.length, outsidePeriodCustomerCount: outsidePeriodCustomer.length, netZeroReversalCount: netZeroReversals.length, journalEntriesConsidered: journalEntries.length, tdsExceptionCount: tdsCompare.filter(t => t.matchStatus !== 'MATCHED').length, unexplainedDifference: unexplained, rdcLedgerIntegrityGap: Math.round((rdcGap || 0) * 100) / 100, customerLedgerIntegrityGap: Math.round((custGap || 0) * 100) / 100, matchedCoveragePct, certified, verdict };
   if (rdcGap != null && Math.abs(rdcGap) > 1) rdc.parserLog.push({ sourceFile: rdc.transactions[0]?.sourceFile || 'rdc', level: 'error', message: `RDC ledger integrity check FAILED: parsed rows differ from stated closing balance by ${rdcGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });
   if (custGap != null && Math.abs(custGap) > 1) customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'error', message: `Customer ledger integrity check FAILED: parsed rows differ from stated closing balance by ${custGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });

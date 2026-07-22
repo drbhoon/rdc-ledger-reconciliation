@@ -5,7 +5,7 @@
  *  - certificate gating stays intact when AI is disabled
  * Run: npx tsx scripts/validate-rescue.ts
  */
-import { aiRowsToParseResult, type AiLedgerRow } from '../src/services/aiLedgerService';
+import { aiRowsToParseResult, aiVisionRescueParse, type AiLedgerRow } from '../src/services/aiLedgerService';
 import { aiCallAllowed, estimateCostUsd, getAiConfig, getAiRunState, recordAiCallFailure, recordAiCallSuccess, startAiRun } from '../src/core/aiConfig';
 import { ledgerIntegrityGap } from '../src/core/reconcile';
 
@@ -56,5 +56,11 @@ ck('guard: a success resets the failure streak', getAiRunState().tripped === fal
 startAiRun({ ...cfg, timeBudgetMs: 0 });
 ck('guard: exhausted time budget blocks calls', aiCallAllowed() === false && getAiRunState().budgetExhausted === true, `skipped=${getAiRunState().skippedCalls}`);
 
-console.log(`\n==== ${pass} passed, ${fail} failed ====`);
-process.exit(fail ? 1 : 0);
+// ── vision rescue gating ─────────────────────────────────────────────────────
+(async () => {
+  const disabled = await aiVisionRescueParse(__filename, 'x.pdf', 'CUSTOMER', { ...cfg, enabled: false });
+  ck('vision: disabled AI returns undefined (no crash, no call)', disabled === undefined);
+
+  console.log(`\n==== ${pass} passed, ${fail} failed ====`);
+  process.exit(fail ? 1 : 0);
+})();

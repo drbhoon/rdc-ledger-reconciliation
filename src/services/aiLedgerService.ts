@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { v4 as uuid } from 'uuid';
 import { extractChequeNo, extractReferences, normalizeReference } from '../core/reference';
 import { parseAmount, signedFromDebitCredit } from '../core/amount';
@@ -50,7 +51,7 @@ async function client(config = getAiConfig()) {
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
-async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, config = getAiConfig()): Promise<T | undefined> {
+async function strictJsonCall<T>(name: string, schema: JsonSchema, input: unknown, config = getAiConfig(), timeoutMs = config.requestTimeoutMs): Promise<T | undefined> {
   // Run-level guardrails: once the time budget is spent or the circuit
   // breaker has tripped, every remaining call returns instantly so the
   // request can never outlive the hosting proxy's timeout.
@@ -71,7 +72,7 @@ async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, c
         'Return strict JSON only. Do not include prose, markdown, or commentary.',
         'AI is not final authority. Provide extraction/classification suggestions with confidence and reason for audit review.',
       ].join('\n'),
-      input: JSON.stringify(input),
+      input: input as any,
       text: {
         format: {
           type: 'json_schema',
@@ -80,7 +81,7 @@ async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, c
           schema,
         },
       },
-    }, { timeout: config.requestTimeoutMs, maxRetries: 0 }), config.requestTimeoutMs + 10_000, name);
+    }, { timeout: timeoutMs, maxRetries: 0 }), timeoutMs + 10_000, name);
     // Exact token accounting for the per-run cost line on the certificate.
     const u: any = (response as any).usage;
     if (u) addAiRunUsage(u.input_tokens ?? u.prompt_tokens ?? 0, u.output_tokens ?? u.completion_tokens ?? 0);
@@ -91,6 +92,10 @@ async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, c
     console.error(`[ai] ${name} failed; continuing deterministic reconciliation`, error);
     return undefined;
   }
+}
+
+async function strictJson<T>(name: string, schema: JsonSchema, input: unknown, config = getAiConfig()): Promise<T | undefined> {
+  return strictJsonCall<T>(name, schema, JSON.stringify(input), config);
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -447,6 +452,44 @@ export async function aiRescueParse(rawText: string, sourceFile: string, sourceS
     sourceFile, level: 'warn',
     message: `AI rescue parser extracted ${result.transactions.length} rows from ${chunks.length} chunks${failed ? ` (${failed} chunks failed)` : ''}${truncated ? ' — document truncated at chunk cap' : ''}; verify via the certificate`,
     confidence: 70,
+  });
+  return result;
+}
+
+/**
+ * Vision rescue for SCANNED (image-only) PDFs: no text layer means neither the
+ * deterministic parsers nor the text-based AI rescue can see anything. The PDF
+ * itself is sent to the vision model page-by-page (OpenAI renders each page as
+ * an image) with the same strict row schema. Same acceptance rule applies: the
+ * result must tie to its own stated opening/closing balances, and the
+ * certificate remains the final gatekeeper.
+ */
+export async function aiVisionRescueParse(filePath: string, sourceFile: string, sourceSide: 'RDC' | 'CUSTOMER', config = getAiConfig()): Promise<ParseResult | undefined> {
+  if (!config.enabled) return undefined;
+  const buf = fs.readFileSync(filePath);
+  if (buf.length > 15 * 1024 * 1024) {
+    console.warn(`[ai] vision rescue skipped for ${sourceFile}: PDF larger than 15MB`);
+    return undefined;
+  }
+  const payload = [{
+    role: 'user',
+    content: [
+      { type: 'input_file', filename: sourceFile, file_data: `data:application/pdf;base64,${buf.toString('base64')}` },
+      {
+        type: 'input_text',
+        text: 'This is a scanned Indian accounting ledger (' + sourceSide + ' side). Read EVERY page carefully. Extract EVERY transaction row: one output row per ledger line with date, voucher type, voucher/reference number, narration, debit and credit as plain numbers (Indian formats like 1,23,456.78 become 123456.78). Include the Opening Balance row with voucherType OPENING and the Closing Balance row with voucherType CLOSING. Skip page headers, column headers, page totals and carried-forward lines. Do not invent rows; if a cell is unreadable use an empty string or 0.',
+      },
+    ],
+  }];
+  // Scanned multi-page extraction is one large call — allow it more time than
+  // a normal text chunk; the run-level budget still caps total wall clock.
+  const out = await strictJsonCall<{ rows: AiLedgerRow[] }>('ledger_vision_rescue_extraction', rescueSchema, payload, config, Math.max(config.requestTimeoutMs, 180_000));
+  if (!out?.rows?.length) return undefined;
+  const result = aiRowsToParseResult(out.rows, sourceFile, sourceSide);
+  result.parserLog.push({
+    sourceFile, level: 'warn',
+    message: `AI VISION rescue parser extracted ${result.transactions.length} rows from a scanned PDF (no text layer); verify via the certificate`,
+    confidence: 65,
   });
   return result;
 }

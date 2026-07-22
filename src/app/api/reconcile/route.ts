@@ -6,7 +6,7 @@ import { extractRawText, parseLedger } from '@/core/parser';
 import { ledgerIntegrityGap, reconcile } from '@/core/reconcile';
 import { writeReport } from '@/core/report';
 import { emptyAiUsage, estimateCostUsd, getAiConfig, getAiRunState, getAiRunUsage, startAiRun, type AiConfig } from '@/core/aiConfig';
-import { aiEnhanceParseResult, aiEnhanceReconciliation, aiRescueParse } from '@/services/aiLedgerService';
+import { aiEnhanceParseResult, aiEnhanceReconciliation, aiRescueParse, aiVisionRescueParse } from '@/services/aiLedgerService';
 import type { ParseResult } from '@/core/types';
 
 async function saveUpload(file: File, dir: string) {
@@ -38,7 +38,13 @@ async function withAiRescue(parsed: ParseResult, filePath: string, fileName: str
   console.log(`[reconcile] AI rescue attempt for ${side} ledger "${fileName}" (${unreadable ? '0 rows' : `gap ${gap?.toFixed(2)}`})`);
   try {
     const raw = await extractRawText(filePath);
-    const rescued = await aiRescueParse(raw, fileName, side, aiConfig);
+    let rescued = await aiRescueParse(raw, fileName, side, aiConfig);
+    // Scanned PDFs have no text layer (raw text near-empty) — the text-based
+    // rescue cannot see anything, so read the pages with the vision model.
+    if ((!rescued || !rescued.transactions.length) && /\.pdf$/i.test(fileName) && raw.replace(/\s+/g, '').length < 200) {
+      console.log(`[reconcile] AI VISION rescue (scanned PDF, no text layer) for ${side} ledger "${fileName}"`);
+      rescued = await aiVisionRescueParse(filePath, fileName, side, aiConfig);
+    }
     if (!rescued || !rescued.transactions.length) {
       parsed.parserLog.push({ sourceFile: fileName, level: 'warn', message: 'AI rescue produced no rows; keeping deterministic parse', confidence: 40 });
       return parsed;
@@ -98,8 +104,8 @@ export async function POST(req: Request) {
     }
     if (!customer.transactions.length) {
       return new NextResponse(
-        `Could not read any transactions from the customer ledger "${customerFile.name}" (AI rescue also failed). ` +
-        'Please upload the customer ledger as Excel/CSV if possible, or contact support with this file.',
+        `Could not read any transactions from the customer ledger "${customerFile.name}" (AI text and vision rescue both failed). ` +
+        'If this is a scanned/photographed PDF, a clearer scan may work; the most reliable option is the customer ledger as Excel/CSV. Otherwise contact support with this file.',
         { status: 422 });
     }
     const aiUsage = emptyAiUsage(aiConfig);

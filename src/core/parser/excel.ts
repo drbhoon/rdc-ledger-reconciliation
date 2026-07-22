@@ -4,6 +4,7 @@ import { v4 as uuid } from 'uuid';
 import { absAmount, signedFromDebitCredit } from '../amount';
 import { parseDate } from '../date';
 import { extractChequeNo, extractReferences, hasTruncatedReference, normalizeReference } from '../reference';
+import { parseGenericWorkbook } from './genericSheet';
 import type { NormalizedTxn, ParseResult, ParserLogRow, VoucherType } from '../types';
 
 type Row = Record<string, unknown> & { __rowNum__: number };
@@ -108,6 +109,11 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
     parserLog.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: 'Detected ' + kind + ' ledger layout' + (kind === 'RDC' && side === 'CUSTOMER' ? ' (customer vendor-ledger mirror: bills=Cr, payments=Dr)' : ''), confidence: 90 });
     if (kind === 'RDC') parseRdcRows(rows, sourceFile, sheetName, transactions, balances, parserLog, side);
     else parseCustomerRows(rows, sourceFile, sheetName, transactions, balances, parserLog);
+  }
+  // Deterministic safety net: none of the known layouts read a single row —
+  // hunt for a ledger table generically before anyone reaches for the AI.
+  if (!transactions.length) {
+    parseGenericWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog);
   }
   return { transactions, balances, parserLog };
 }

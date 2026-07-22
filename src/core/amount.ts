@@ -3,11 +3,14 @@ export function parseAmount(value: unknown): number {
   if (value == null) return 0;
   const raw = String(value).replace(/₹|Rs\.?|INR/gi, '').trim();
   if (!raw || raw === '-') return 0;
-  const neg = /\(|\bCr\b|-$/.test(raw);
-  const cleaned = raw.replace(/[(),]/g, '').replace(/Dr|Cr/gi, '').replace(/[^0-9.-]/g, '');
-  const num = Number(cleaned);
-  if (!Number.isFinite(num)) return 0;
-  return neg ? -Math.abs(num) : num;
+  // SAP-style trailing minus ("300000.00-") and leading minus both negate.
+  const neg = /\(|\bCr\b/.test(raw) || /-\s*$/.test(raw) || /^-/.test(raw);
+  const body = raw.replace(/[(),]/g, '').replace(/\bDr\b|\bCr\b/gi, '').replace(/^-|-+\s*$/g, '').replace(/\s+/g, '');
+  // Only a purely numeric body is an amount — internal dashes/letters mean a
+  // date or code ("01-Jan-26", "30 Days"), never money.
+  if (!/^\d+(?:\.\d+)?$/.test(body)) return 0;
+  const num = Number(body);
+  return neg ? -num : num;
 }
 export function absAmount(value: unknown): number { return Math.abs(parseAmount(value)); }
 export function within(a: number, b: number, tolerance = 1) { return Math.abs(a - b) <= tolerance; }

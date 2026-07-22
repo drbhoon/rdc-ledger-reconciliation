@@ -51,11 +51,17 @@ export function applyCustomerNetZeroReversals(customer: ParseResult, tolerance =
  * invoices and normalise everything to the RDC-receivable view so signs are
  * consistent (e.g. Synergia's credit-side purchases).
  */
-function normalizeCustomerOrientation(customer: ParseResult): boolean {
+function normalizeCustomerOrientation(customer: ParseResult, rdc?: ParseResult): boolean {
   const invoices = customer.transactions.filter(t => ['INVOICE', 'JOURNAL_INVOICE'].includes(t.voucherType));
   if (!invoices.length) return false;
   const invoiceSum = invoices.reduce((s, t) => s + t.signedAmountRdcView, 0);
-  const flipped = invoiceSum < 0;
+  // The counterparty's polarity must AGREE WITH THE RDC SIDE, not with a
+  // fixed receivable assumption: in a customer (receivable) recon RDC
+  // invoices are positive, but in a vendor (payable) recon — e.g. Dalmia
+  // Cement, where RDC is the buyer — invoices are negative on BOTH sides.
+  const rdcInvoiceSum = (rdc?.transactions ?? []).filter(t => t.voucherType === 'INVOICE').reduce((s, t) => s + t.signedAmountRdcView, 0);
+  const wantPositive = rdc && Math.abs(rdcInvoiceSum) > 0 ? rdcInvoiceSum > 0 : true;
+  const flipped = wantPositive ? invoiceSum < 0 : invoiceSum > 0;
   if (flipped) {
     for (const t of customer.transactions) t.signedAmountRdcView = -t.signedAmountRdcView;
     customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'info', message: 'Customer ledger printed in receivable view; transaction signs normalized to RDC view', confidence: 90 });
@@ -109,7 +115,7 @@ export function ledgerIntegrityGap(side: ParseResult): number | undefined {
 }
 
 export function reconcile(rdc: ParseResult, customer: ParseResult, options: ReconcileOptions): ReconcileResult {
-  normalizeCustomerOrientation(customer);
+  normalizeCustomerOrientation(customer, rdc);
   deriveMissingOpening(rdc, 'RDC');
   const netZeroReversals = applyCustomerNetZeroReversals(customer, options.paymentTolerance);
   const activeCustomer = customer.transactions.filter(t => !t.isNetZeroReversal);
@@ -269,9 +275,22 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     }
   }
 
-  const unmatchedRdc = rdcInPeriod.filter(t => !usedRdc.has(t.id) && !['OTHER'].includes(t.voucherType)).map(t => matchRow({ reasonCode: reasonForRdc(t), rdcTxn: t, rdcAmount: t.signedAmountRdcView, difference: t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Present in RDC only' }));
+  // OTHER rows WITH money (e.g. Dalmia's OTH fund transfers from the generic
+  // adapter) must appear in the unmatched sheets — excluding them silently
+  // leaks value out of the summary identity. Zero-amount OTHER rows stay out.
+  const keepUnmatched = (t: NormalizedTxn) => t.voucherType !== 'OTHER' || Math.abs(t.signedAmountRdcView) > 0.005;
+  // RDC entries OUTSIDE the selected period are part of the RDC balance but
+  // were invisible to matching — surface them in their own bucket so the
+  // statement still ties (mirror of the customer outside-period bucket).
+  const outsidePeriodRdcRows = rdc.transactions
+    .filter(t => isOutsidePeriod(t.date, options.periodStart, options.periodEnd) && Math.abs(t.signedAmountRdcView) > 0.005)
+    .map(t => matchRow({ reasonCode: 'OUTSIDE_PERIOD_PRESENT_IN_RDC', rdcTxn: t, rdcAmount: t.signedAmountRdcView, difference: t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'RDC entry outside the selected reconciliation period' }));
+  const unmatchedRdc = [
+    ...rdcInPeriod.filter(t => !usedRdc.has(t.id) && keepUnmatched(t)).map(t => matchRow({ reasonCode: reasonForRdc(t), rdcTxn: t, rdcAmount: t.signedAmountRdcView, difference: t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Present in RDC only' })),
+    ...outsidePeriodRdcRows,
+  ];
   const unmatchedCustomer = [
-    ...customerInPeriod.filter(t => !usedCust.has(t.id) && !['OTHER'].includes(t.voucherType)),
+    ...customerInPeriod.filter(t => !usedCust.has(t.id) && keepUnmatched(t)),
     ...syntheticUnmatchedPayments,
   ].map(t => matchRow({ reasonCode: reasonForCustomer(t), customerTxn: t, customerAmount: t.signedAmountRdcView, difference: -t.signedAmountRdcView, confidence: t.parseConfidence, remarks: t.parserNotes?.includes('Aggregated unmatched payment allocations to voucher level') ? 'Customer payment voucher not matched to any RDC receipt' : 'Present in customer only' }));
 
@@ -420,7 +439,7 @@ function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: Match
   return lines;
 }
 function particularFor(reason: ReasonCode) {
-  return ({ MISSING_IN_CUSTOMER: 'Invoice/payment present in RDC not booked by customer', MISSING_IN_RDC: 'Entry accounted by customer but not in RDC', OUTSIDE_RDC_PERIOD_PRESENT_IN_CUSTOMER: 'Outside RDC period present in customer ledger', TDS_NOT_FOUND: 'TDS entry not found in customer ledger', TDS_JOURNAL_NOT_IN_RDC: 'TDS deducted by customer through Journal not in RDC', JOURNAL_INVOICE_NOT_IN_RDC: 'Purchase invoices booked through Journal not in RDC', JOURNAL_ADJUSTMENT_REVIEW: 'Journal adjustment requires review', LOW_PARSE_CONFIDENCE_REFERENCE_NOT_EXTRACTED: 'Reference truncated or not confidently extracted', LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW: 'Reference partial or AI review required', CUSTOMER_PAYMENT_REVERSAL_NET_ZERO: 'Customer payment reversal netted to zero' } as Record<string,string>)[reason] || reason.replace(/_/g, ' ');
+  return ({ MISSING_IN_CUSTOMER: 'Invoice/payment present in RDC not booked by customer', MISSING_IN_RDC: 'Entry accounted by customer but not in RDC', OUTSIDE_RDC_PERIOD_PRESENT_IN_CUSTOMER: 'Outside RDC period present in customer ledger', OUTSIDE_PERIOD_PRESENT_IN_RDC: 'Outside period present in RDC ledger', TDS_NOT_FOUND: 'TDS entry not found in customer ledger', TDS_JOURNAL_NOT_IN_RDC: 'TDS deducted by customer through Journal not in RDC', JOURNAL_INVOICE_NOT_IN_RDC: 'Purchase invoices booked through Journal not in RDC', JOURNAL_ADJUSTMENT_REVIEW: 'Journal adjustment requires review', LOW_PARSE_CONFIDENCE_REFERENCE_NOT_EXTRACTED: 'Reference truncated or not confidently extracted', LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW: 'Reference partial or AI review required', CUSTOMER_PAYMENT_REVERSAL_NET_ZERO: 'Customer payment reversal netted to zero' } as Record<string,string>)[reason] || reason.replace(/_/g, ' ');
 }
 function remarkFor(reason: ReasonCode) {
   return ({ OUTSIDE_RDC_PERIOD_PRESENT_IN_CUSTOMER: 'Not mixed with normal unmatched customer items', TDS_JOURNAL_NOT_IN_RDC: 'Journal TDS considered in TDS compare', JOURNAL_INVOICE_NOT_IN_RDC: 'Journal invoice considered, not ignored', LOW_PARSE_CONFIDENCE_REFERENCE_NOT_EXTRACTED: 'Send to review; do not auto-match below confidence 75', LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW: 'AI/parser found only partial evidence; human approval required' } as Record<string,string>)[reason] || '';

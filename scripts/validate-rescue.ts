@@ -61,6 +61,19 @@ ck('guard: exhausted time budget blocks calls', aiCallAllowed() === false && get
   const disabled = await aiVisionRescueParse(__filename, 'x.pdf', 'CUSTOMER', { ...cfg, enabled: false });
   ck('vision: disabled AI returns undefined (no crash, no call)', disabled === undefined);
 
+  // Page-window splitting on a real scanned PDF (local-only data; skip if absent)
+  const { existsSync, readFileSync } = await import('fs');
+  const scanned = './test-data-210726/Customer The Indogrid 30Jun26.pdf';
+  if (existsSync(scanned)) {
+    const { splitPdfForVision } = await import('../src/services/aiLedgerService');
+    const { pageCount, chunks } = await splitPdfForVision(readFileSync(scanned));
+    ck('vision: 17-page hi-res scan splits into 4-page windows', pageCount === 17 && chunks.length === 5, `pages=${pageCount} chunks=${chunks.length}`);
+    ck('vision: every window is a valid PDF', chunks.every(c => c.subarray(0, 5).toString() === '%PDF-'));
+    ck('vision: windows are call-sized (< 4MB each)', chunks.every(c => c.length < 4 * 1024 * 1024), `max=${Math.max(...chunks.map(c => c.length))}`);
+  } else {
+    console.log('SKIP vision split checks (local scanned PDF not present)');
+  }
+
   console.log(`\n==== ${pass} passed, ${fail} failed ====`);
   process.exit(fail ? 1 : 0);
 })();

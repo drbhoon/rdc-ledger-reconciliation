@@ -434,7 +434,9 @@ export async function aiRescueParse(rawText: string, sourceFile: string, sourceS
     chunks.push(lines.slice(i, i + CHUNK).join('\n'));
   }
   const truncated = lines.length > config.rescueMaxChunks * CHUNK;
-  const all: AiLedgerRow[] = [];
+  // Collect per-chunk then flatten IN ORDER — concurrent completion order is
+  // arbitrary, and OPENING/CLOSING rows must keep their document position.
+  const byChunk: (AiLedgerRow[] | undefined)[] = new Array(chunks.length);
   let failed = 0;
   await mapLimit(chunks.map((c, idx) => ({ c, idx })), config.concurrency, async ({ c, idx }) => {
     const out = await strictJson<{ rows: AiLedgerRow[] }>('ledger_rescue_extraction', rescueSchema, {
@@ -443,9 +445,10 @@ export async function aiRescueParse(rawText: string, sourceFile: string, sourceS
       chunkIndex: idx,
       text: c,
     }, config);
-    if (out?.rows) all.push(...out.rows);
+    if (out?.rows) byChunk[idx] = out.rows;
     else failed += 1;
   });
+  const all: AiLedgerRow[] = byChunk.flatMap(r => r ?? []);
   if (!all.length) return undefined;
   const result = aiRowsToParseResult(all, sourceFile, sourceSide);
   result.parserLog.push({
@@ -464,31 +467,67 @@ export async function aiRescueParse(rawText: string, sourceFile: string, sourceS
  * result must tie to its own stated opening/closing balances, and the
  * certificate remains the final gatekeeper.
  */
+/**
+ * Split a (scanned) PDF into small page-window sub-PDFs so each vision call
+ * stays fast and its JSON output small. Pure-JS via pdf-lib — no native deps.
+ * Exported for offline testing.
+ */
+export async function splitPdfForVision(buf: Buffer, pagesPerChunk = 4, maxPages = 120): Promise<{ pageCount: number; chunks: Buffer[] }> {
+  const { PDFDocument } = await import('pdf-lib');
+  const src = await PDFDocument.load(buf, { ignoreEncryption: true });
+  const pageCount = src.getPageCount();
+  const usable = Math.min(pageCount, maxPages);
+  const chunks: Buffer[] = [];
+  for (let start = 0; start < usable; start += pagesPerChunk) {
+    const doc = await PDFDocument.create();
+    const idxs = Array.from({ length: Math.min(pagesPerChunk, usable - start) }, (_, k) => start + k);
+    const pages = await doc.copyPages(src, idxs);
+    for (const p of pages) doc.addPage(p);
+    chunks.push(Buffer.from(await doc.save()));
+  }
+  return { pageCount, chunks };
+}
+
 export async function aiVisionRescueParse(filePath: string, sourceFile: string, sourceSide: 'RDC' | 'CUSTOMER', config = getAiConfig()): Promise<ParseResult | undefined> {
   if (!config.enabled) return undefined;
   const buf = fs.readFileSync(filePath);
-  if (buf.length > 15 * 1024 * 1024) {
-    console.warn(`[ai] vision rescue skipped for ${sourceFile}: PDF larger than 15MB`);
+  if (buf.length > 30 * 1024 * 1024) {
+    console.warn(`[ai] vision rescue skipped for ${sourceFile}: PDF larger than 30MB`);
     return undefined;
   }
-  const payload = [{
-    role: 'user',
-    content: [
-      { type: 'input_file', filename: sourceFile, file_data: `data:application/pdf;base64,${buf.toString('base64')}` },
-      {
-        type: 'input_text',
-        text: 'This is a scanned Indian accounting ledger (' + sourceSide + ' side). Read EVERY page carefully. Extract EVERY transaction row: one output row per ledger line with date, voucher type, voucher/reference number, narration, debit and credit as plain numbers (Indian formats like 1,23,456.78 become 123456.78). Include the Opening Balance row with voucherType OPENING and the Closing Balance row with voucherType CLOSING. Skip page headers, column headers, page totals and carried-forward lines. Do not invent rows; if a cell is unreadable use an empty string or 0.',
-      },
-    ],
-  }];
-  // Scanned multi-page extraction is one large call — allow it more time than
-  // a normal text chunk; the run-level budget still caps total wall clock.
-  const out = await strictJsonCall<{ rows: AiLedgerRow[] }>('ledger_vision_rescue_extraction', rescueSchema, payload, config, Math.max(config.requestTimeoutMs, 180_000));
-  if (!out?.rows?.length) return undefined;
-  const result = aiRowsToParseResult(out.rows, sourceFile, sourceSide);
+  // One call for a whole 74-page scan cannot finish inside any sane per-call
+  // timeout and its JSON output would blow the response limit — split into
+  // page windows and extract them in parallel, preserving page order.
+  let pageCount = 0;
+  let chunks: Buffer[];
+  try {
+    ({ pageCount, chunks } = await splitPdfForVision(buf));
+  } catch (e) {
+    console.warn(`[ai] vision rescue: PDF split failed for ${sourceFile} (${e instanceof Error ? e.message : 'error'}); sending whole file`);
+    chunks = [buf];
+  }
+  const prompt = (part: string) =>
+    `This is a scanned Indian accounting ledger (${sourceSide} side), ${part}. Read EVERY page carefully. Extract EVERY transaction row: one output row per ledger line with date, voucher type, voucher/reference number, narration, debit and credit as plain numbers (Indian formats like 1,23,456.78 become 123456.78). If an Opening Balance row is visible include it with voucherType OPENING; if a Closing Balance row is visible include it with voucherType CLOSING. Skip page headers, column headers, page totals and carried-forward lines. Do not invent rows; if a cell is unreadable use an empty string or 0.`;
+  const byChunk: (AiLedgerRow[] | undefined)[] = new Array(chunks.length);
+  let failed = 0;
+  await mapLimit(chunks.map((c, idx) => ({ c, idx })), Math.max(2, config.concurrency), async ({ c, idx }) => {
+    const payload = [{
+      role: 'user',
+      content: [
+        { type: 'input_file', filename: `${sourceFile.replace(/\.pdf$/i, '')}-part${idx + 1}.pdf`, file_data: `data:application/pdf;base64,${c.toString('base64')}` },
+        { type: 'input_text', text: prompt(chunks.length > 1 ? `pages part ${idx + 1} of ${chunks.length}` : 'complete document') },
+      ],
+    }];
+    const out = await strictJsonCall<{ rows: AiLedgerRow[] }>('ledger_vision_rescue_extraction', rescueSchema, payload, config, Math.max(config.requestTimeoutMs, 120_000));
+    if (out?.rows) byChunk[idx] = out.rows;
+    else failed += 1;
+  });
+  const all: AiLedgerRow[] = byChunk.flatMap(r => r ?? []);
+  if (!all.length) return undefined;
+  const result = aiRowsToParseResult(all, sourceFile, sourceSide);
   result.parserLog.push({
     sourceFile, level: 'warn',
-    message: `AI VISION rescue parser extracted ${result.transactions.length} rows from a scanned PDF (no text layer); verify via the certificate`,
+    message: `AI VISION rescue parser extracted ${result.transactions.length} rows from a scanned PDF (${pageCount || '?'} pages in ${chunks.length} vision calls${failed ? `, ${failed} failed` : ''}); verify via the certificate`,
     confidence: 65,
   });
   return result;

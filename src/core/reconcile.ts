@@ -126,6 +126,23 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   const usedCust = new Set<string>();
   const matches: MatchRow[] = [];
   const possibleMatches: MatchRow[] = [];
+  // Near-identical references: both parties typed the same invoice number
+  // with a small slip ("2334788076" vs "2334788086"). Same length with ≤2
+  // differing characters, or one containing the other (≥6 chars), counts as
+  // similar — combined with equal amount AND near date this is a match.
+  const refSimilar = (a?: string, b?: string): boolean => {
+    if (!a || !b) return false;
+    const x = a.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const y = b.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!x || !y || x === y) return false; // identical is the sameRef tier's job
+    if (x.length >= 6 && y.length >= 6 && (x.includes(y) || y.includes(x))) return true;
+    if (x.length === y.length && x.length >= 6) {
+      let diff = 0;
+      for (let i = 0; i < x.length; i++) if (x[i] !== y[i] && ++diff > 2) return false;
+      return diff > 0 && diff <= 2;
+    }
+    return false;
+  };
   const tryMatch = (rdcTxn: NormalizedTxn, candidates: NormalizedTxn[], types: VoucherType[], dateTolerance: number, amountTolerance: number) => {
     const rref = refKey(rdcTxn);
     const rcol = collapsedKey(rdcTxn);
@@ -133,6 +150,7 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     let best: { txn: NormalizedTxn; confidence: number; reason?: string } | undefined;
     let refBest: { txn: NormalizedTxn; confidence: number; reason?: string } | undefined;
     let colBest: { txn: NormalizedTxn; confidence: number; reason?: string; days: number } | undefined;
+    let simBest: { txn: NormalizedTxn; confidence: number; reason?: string; days: number } | undefined;
     for (const c of candidates) {
       if (usedCust.has(c.id) || !types.includes(c.voucherType)) continue;
       const cref = refKey(c);
@@ -153,9 +171,16 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
       if (rcol && rcol.length >= 5 && collapsedKey(c) === rcol && amountOk) {
         if (!colBest || days < colBest.days) colBest = { txn: c, confidence: 90, reason: `Truncated customer reference matched (${cref || rcol} = ${rref}) with equal amount`, days };
       }
+      // Both parties typed nearly the same reference with a slip AND the
+      // amount and date agree — that is a match, not a review item
+      // (accounts-team feedback, Dalmia 2026-07: "invoice number entered
+      // differently by each party though amount and date match").
+      if (amountOk && dateOk && refSimilar(rref, cref)) {
+        if (!simBest || days < simBest.days) simBest = { txn: c, confidence: 80, reason: `Amount and date match; reference nearly matches (${cref} vs ${rref}) — likely data-entry slip`, days };
+      }
       if (amountOk && dateOk && !best) best = { txn: c, confidence: 72, reason: 'Amount and date near; review required' };
     }
-    return refBest || colBest || best;
+    return refBest || colBest || simBest || best;
   };
   for (const r of rdcInPeriod) {
     // Credit notes are often booked by customers as (negative) purchases or
@@ -217,12 +242,21 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     if (total < 0.01) continue;
     const groupDate = group[0].date;
     let receipt: NormalizedTxn | undefined;
-    for (const r of rdcInPeriod) {
-      if (usedRdc.has(r.id) || !paymentTypes.includes(r.voucherType)) continue;
-      if (!within(signedTotal, r.signedAmountRdcView, options.paymentTolerance)) continue;
-      if (daysBetween(groupDate, r.date) > options.paymentDateToleranceDays) continue;
-      receipt = r;
-      break;
+    // Pass 1: proper receipt rows. Pass 2: OTHER rows — AP exports sometimes
+    // leave the Type cell blank on payment rows (Dalmia/RDC APP), so an OTHER
+    // row with the exact signed amount on a near date IS the receipt.
+    for (const allowOther of [false, true]) {
+      for (const r of rdcInPeriod) {
+        if (usedRdc.has(r.id)) continue;
+        const typeOk = allowOther ? r.voucherType === 'OTHER' : paymentTypes.includes(r.voucherType);
+        if (!typeOk) continue;
+        if (!within(signedTotal, r.signedAmountRdcView, options.paymentTolerance)) continue;
+        if (daysBetween(groupDate, r.date) > options.paymentDateToleranceDays) continue;
+        receipt = r;
+        if (allowOther) r.parserNotes = [...(r.parserNotes || []), 'Unclassified (blank Type) RDC row matched as receipt by amount+date'];
+        break;
+      }
+      if (receipt) break;
     }
     if (!receipt) continue;
     usedRdc.add(receipt.id);
@@ -239,6 +273,15 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
         ? `Customer payment voucher ${voucher} (${group.length} invoice allocations totalling ${total.toFixed(2)}) matched to RDC receipt ${receipt.voucherNo || ''}`
         : `Customer payment ${voucher} matched to RDC receipt ${receipt.voucherNo || ''} by amount`,
     }));
+  }
+
+  // A pair the invoice pass could only flag as "possible" may since have been
+  // PROPERLY matched by the grouped payment pass — drop those stale review
+  // flags, they were pure noise on the Possible_Matches sheet (Dalmia: 126
+  // payment pairs flagged for review that were in fact matched).
+  for (let i = possibleMatches.length - 1; i >= 0; i--) {
+    const p = possibleMatches[i];
+    if ((p.rdcTxn && usedRdc.has(p.rdcTxn.id)) || (p.customerTxn && usedCust.has(p.customerTxn.id))) possibleMatches.splice(i, 1);
   }
 
   // Unmatched customer payment ALLOCATION children are re-aggregated to their

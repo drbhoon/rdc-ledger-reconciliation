@@ -38,8 +38,13 @@ const ck = (label: string, cond: boolean, detail = '') => { console.log((cond ? 
   const custInvSum = cust.transactions.filter(t => t.voucherType === 'INVOICE').reduce((s, t) => s + t.signedAmountRdcView, 0);
   ck('orientation: payable recon NOT flipped (customer invoices stay negative)', custInvSum < 0, custInvSum.toFixed(0));
   ck('reconcile: CERTIFIED', r.cards.certified === true, String(r.cards.verdict));
-  ck('reconcile: >= 600 matched', r.matches.length >= 600, String(r.matches.length));
-  ck('reconcile: coverage > 90%', Number(r.cards.matchedCoveragePct) > 90, String(r.cards.matchedCoveragePct));
+  ck('reconcile: >= 635 matched (round-8: typo-refs + blank-Type payments)', r.matches.length >= 635, String(r.matches.length));
+  ck('reconcile: coverage > 99%', Number(r.cards.matchedCoveragePct) > 99, String(r.cards.matchedCoveragePct));
+  ck('reconcile: NO stale review flags (was 126 matched-but-flagged payments)', r.possibleMatches.length === 0, String(r.possibleMatches.length));
+  const typo = r.matches.find(m => /reference nearly matches/.test(m.remarks || ''));
+  ck('reconcile: data-entry-slip refs matched by amount+date (e.g. 2334788076/2334788086)', !!typo, (typo?.remarks || '').slice(0, 70));
+  const blankType = r.matches.find(m => m.rdcTxn?.parserNotes?.some(n => /blank Type/.test(n)));
+  ck('reconcile: blank-Type RDC payment rows matched as receipts', !!blankType, blankType ? `${blankType.rdcTxn?.date} ${blankType.rdcAmount}` : '');
   ck('reconcile: unexplained ~ 0 (OTHER rows + identity intact)', Math.abs(Number(r.cards.unexplainedDifference)) <= 1, String(r.cards.unexplainedDifference));
   const variance = r.summaryLines.find(l => /Amount differences on reference-matched/.test(l.particular));
   ck('reconcile: matched variance is TDS-scale, not orientation-scale', !!variance && variance.amount < 500000, String(variance?.amount));

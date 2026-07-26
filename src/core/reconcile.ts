@@ -7,6 +7,16 @@ const invoiceTypes: VoucherType[] = ['INVOICE','JOURNAL_INVOICE','DEBIT_NOTE'];
 const paymentTypes: VoucherType[] = ['RECEIPT','PAYMENT'];
 const tdsTypes: VoucherType[] = ['TDS','JOURNAL_TDS'];
 const creditTypes: VoucherType[] = ['CREDIT_NOTE'];
+/** Document families for match preference (invoice vs note vs cash vs tax). */
+function familyOf(t: VoucherType): string {
+  if (t === 'DEBIT_NOTE' || t === 'CREDIT_NOTE') return 'NOTE';
+  if (paymentTypes.includes(t) || t === 'REVERSAL') return 'CASH';
+  if (tdsTypes.includes(t)) return 'TAX';
+  if (t === 'INVOICE' || t === 'JOURNAL_INVOICE') return 'INV';
+  return 'OTHER';
+}
+function sameFamily(a: VoucherType, b: VoucherType) { return familyOf(a) === familyOf(b); }
+const FAMILY_LABEL: Record<string, string> = { INV: 'Invoices', CASH: 'Receipts / Payments', NOTE: 'Credit / Debit notes', TAX: 'TDS / TCS', OTHER: 'Other entries' };
 function absSigned(t: NormalizedTxn) { return Math.abs(t.signedAmountRdcView); }
 function refKey(t: NormalizedTxn) { return t.normalizedReferenceNo || t.extractedReferences?.[0] || ''; }
 const collapsedCache = new WeakMap<NormalizedTxn, string>();
@@ -119,9 +129,15 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   deriveMissingOpening(rdc, 'RDC');
   const netZeroReversals = applyCustomerNetZeroReversals(customer, options.paymentTolerance);
   const activeCustomer = customer.transactions.filter(t => !t.isNetZeroReversal);
-  const outsidePeriodCustomerTxns = activeCustomer.filter(t => isOutsidePeriod(t.date, options.periodStart, options.periodEnd));
-  const customerInPeriod = activeCustomer.filter(t => !isOutsidePeriod(t.date, options.periodStart, options.periodEnd));
-  const rdcInPeriod = rdc.transactions.filter(t => !isOutsidePeriod(t.date, options.periodStart, options.periodEnd));
+  // Matching runs over EVERY row on both sides, not just the selected period.
+  // The two ledgers rarely cover identical spans (Suroj: RDC to Mar-26,
+  // customer to Jun-25) and customers routinely book an invoice in a later
+  // month — period-filtering the candidates made those pairs unmatchable by
+  // construction. The period is applied afterwards, for REPORTING only:
+  // whatever stays unmatched and falls outside it goes to its own bucket.
+  const customerInPeriod = activeCustomer;
+  const rdcInPeriod = rdc.transactions;
+  const outOfPeriod = (t: NormalizedTxn) => isOutsidePeriod(t.date, options.periodStart, options.periodEnd);
   const usedRdc = new Set<string>();
   const usedCust = new Set<string>();
   const matches: MatchRow[] = [];
@@ -148,7 +164,7 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     const rcol = collapsedKey(rdcTxn);
     const amount = absSigned(rdcTxn);
     let best: { txn: NormalizedTxn; confidence: number; reason?: string } | undefined;
-    let refBest: { txn: NormalizedTxn; confidence: number; reason?: string } | undefined;
+    let refBest: { txn: NormalizedTxn; confidence: number; reason?: string; familyPenalty: number; amountGap: number } | undefined;
     let colBest: { txn: NormalizedTxn; confidence: number; reason?: string; days: number } | undefined;
     let simBest: { txn: NormalizedTxn; confidence: number; reason?: string; days: number } | undefined;
     for (const c of candidates) {
@@ -160,11 +176,27 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
       const amountOk = within(amount, absSigned(c), amountTolerance);
       const days = daysBetween(rdcTxn.date, c.date);
       const dateOk = days <= dateTolerance;
-      if (sameRef && amountOk) return { txn: c, confidence: 100, reason: 'Reference matched' };
       // Reference-first: a matching reference IS a match even when amounts
       // differ (the difference is reported), instead of dumping the pair into
       // both Unmatched sheets. This is what a manual VLOOKUP does.
-      if (sameRef && !refBest) refBest = { txn: c, confidence: 88, reason: `Reference matched; amount differs by ${(amount - absSigned(c)).toFixed(2)} — verify amount` };
+      // Among same-reference candidates prefer the SAME DOCUMENT FAMILY and
+      // then the closest amount: a customer debit note quoting an RDC invoice
+      // number must not consume that invoice's real purchase entry (Suroj:
+      // invoice ₹35,000 was pairing with a ₹700 debit note).
+      if (sameRef) {
+        const familyPenalty = sameFamily(rdcTxn.voucherType, c.voucherType) ? 0 : 1;
+        const amountGap = Math.abs(amount - absSigned(c));
+        const better = !refBest || familyPenalty < refBest.familyPenalty
+          || (familyPenalty === refBest.familyPenalty && amountGap < refBest.amountGap);
+        if (better) {
+          refBest = {
+            txn: c, familyPenalty, amountGap,
+            confidence: amountOk && !familyPenalty ? 100 : 88,
+            reason: amountOk && !familyPenalty ? 'Reference matched'
+              : `Reference matched${familyPenalty ? ` (${c.voucherType} against ${rdcTxn.voucherType})` : ''}; amount differs by ${(amount - absSigned(c)).toFixed(2)} — verify amount`,
+          };
+        }
+      }
       // Truncated-reference tier: customers often book "7MU25BP1-6960" as
       // "7MU6960" (year+doc-type infix dropped). Collapsed refs equal AND
       // amount equal = a solid match; prefer the nearest date on collisions.
@@ -322,20 +354,33 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   // adapter) must appear in the unmatched sheets — excluding them silently
   // leaks value out of the summary identity. Zero-amount OTHER rows stay out.
   const keepUnmatched = (t: NormalizedTxn) => t.voucherType !== 'OTHER' || Math.abs(t.signedAmountRdcView) > 0.005;
-  // RDC entries OUTSIDE the selected period are part of the RDC balance but
-  // were invisible to matching — surface them in their own bucket so the
-  // statement still ties (mirror of the customer outside-period bucket).
-  const outsidePeriodRdcRows = rdc.transactions
-    .filter(t => isOutsidePeriod(t.date, options.periodStart, options.periodEnd) && Math.abs(t.signedAmountRdcView) > 0.005)
+  // Everything still unmatched after full-span matching, split by the user's
+  // reporting period so each row lands in exactly one bucket (the summary
+  // identity depends on that).
+  const leftoverRdcAll = rdcInPeriod.filter(t => !usedRdc.has(t.id) && keepUnmatched(t));
+  const leftoverCust = [...customerInPeriod.filter(t => !usedCust.has(t.id) && keepUnmatched(t)), ...syntheticUnmatchedPayments];
+  // When the customer's ledger starts later than RDC's AND carries a brought-
+  // forward opening balance, RDC's earlier entries are already rolled up in
+  // that opening figure — reporting them as "not booked by customer" is
+  // misleading, so they get their own bucket (this is what the accounts team
+  // does by hand). Suroj: RDC from Sep-2014, customer from Apr-2020.
+  const custDates = customerInPeriod.map(t => t.date).filter((d): d is string => !!d).sort();
+  const custStart = custDates[0];
+  const custHasBroughtForward = Math.abs(customer.balances.opening ?? 0) > 1;
+  const beforeCustomerLedger = (t: NormalizedTxn) => !!(custStart && custHasBroughtForward && t.date && t.date < custStart);
+  const preLedgerRdcRows = leftoverRdcAll.filter(beforeCustomerLedger)
+    .map(t => matchRow({ reasonCode: 'RDC_BEFORE_CUSTOMER_LEDGER_START', rdcTxn: t, rdcAmount: t.signedAmountRdcView, difference: t.signedAmountRdcView, confidence: t.parseConfidence, remarks: `RDC entry dated before the customer ledger starts (${custStart}) — already inside the customer's opening balance` }));
+  const leftoverRdc = leftoverRdcAll.filter(t => !beforeCustomerLedger(t));
+  const outsidePeriodRdcRows = leftoverRdc.filter(outOfPeriod)
     .map(t => matchRow({ reasonCode: 'OUTSIDE_PERIOD_PRESENT_IN_RDC', rdcTxn: t, rdcAmount: t.signedAmountRdcView, difference: t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'RDC entry outside the selected reconciliation period' }));
   const unmatchedRdc = [
-    ...rdcInPeriod.filter(t => !usedRdc.has(t.id) && keepUnmatched(t)).map(t => matchRow({ reasonCode: reasonForRdc(t), rdcTxn: t, rdcAmount: t.signedAmountRdcView, difference: t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Present in RDC only' })),
+    ...leftoverRdc.filter(t => !outOfPeriod(t)).map(t => matchRow({ reasonCode: reasonForRdc(t), rdcTxn: t, rdcAmount: t.signedAmountRdcView, difference: t.signedAmountRdcView, confidence: t.parseConfidence, remarks: 'Present in RDC only' })),
     ...outsidePeriodRdcRows,
+    ...preLedgerRdcRows,
   ];
-  const unmatchedCustomer = [
-    ...customerInPeriod.filter(t => !usedCust.has(t.id) && keepUnmatched(t)),
-    ...syntheticUnmatchedPayments,
-  ].map(t => matchRow({ reasonCode: reasonForCustomer(t), customerTxn: t, customerAmount: t.signedAmountRdcView, difference: -t.signedAmountRdcView, confidence: t.parseConfidence, remarks: t.parserNotes?.includes('Aggregated unmatched payment allocations to voucher level') ? 'Customer payment voucher not matched to any RDC receipt' : 'Present in customer only' }));
+  const unmatchedCustomer = leftoverCust.filter(t => !outOfPeriod(t))
+    .map(t => matchRow({ reasonCode: reasonForCustomer(t), customerTxn: t, customerAmount: t.signedAmountRdcView, difference: -t.signedAmountRdcView, confidence: t.parseConfidence, remarks: t.parserNotes?.includes('Aggregated unmatched payment allocations to voucher level') ? 'Customer payment voucher not matched to any RDC receipt' : 'Present in customer only' }));
+  const outsidePeriodCustomerTxns = leftoverCust.filter(outOfPeriod);
 
   // ── Probable-match suggestions ───────────────────────────────────────────
   // Customers sometimes book invoices under fabricated reference numbers that
@@ -464,12 +509,25 @@ function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: Match
   if (Math.abs(matchedVariance) > 1) {
     pushLine('Amount differences on reference-matched invoices/receipts', matchedVariance, 'Customer minus RDC on same-reference items; see Matched_Invoices Difference column', 'AMOUNT_MISMATCH');
   }
+  // "Present in RDC only" / "present in customer only" are split BY DOCUMENT
+  // TYPE, the way the accounts team writes a recon by hand ("INVOICES NOT
+  // BOOKED BY SUROJ", "RECEIPTS TO BE TAKEN BY SUROJ", "TCS TO BE BOOKED",
+  // "CN TO BE BOOKED") instead of one opaque net figure.
+  const splitReasons = new Set<string>(['MISSING_IN_CUSTOMER', 'MISSING_IN_RDC']);
+  const groupKey = (e: MatchRow) => {
+    const reason = e.reasonCode || 'LOW_PARSE_CONFIDENCE';
+    if (!splitReasons.has(reason)) return reason;
+    const type = e.rdcTxn?.voucherType || e.customerTxn?.voucherType;
+    return `${reason}::${type ? familyOf(type) : 'OTHER'}`;
+  };
   const grouped = new Map<string, MatchRow[]>();
-  for (const e of exceptions) grouped.set(e.reasonCode || 'LOW_PARSE_CONFIDENCE', [...(grouped.get(e.reasonCode || 'LOW_PARSE_CONFIDENCE') || []), e]);
-  for (const [reason, rows] of grouped) {
+  for (const e of exceptions) { const k = groupKey(e); grouped.set(k, [...(grouped.get(k) || []), e]); }
+  for (const [key, rows] of grouped) {
     const amount = rows.reduce((s,r)=>s+r.difference,0);
     if (Math.abs(amount) <= 1) continue;
-    pushLine(particularFor(reason as ReasonCode), amount, remarkFor(reason as ReasonCode), reason as ReasonCode);
+    const [reason, family] = key.split('::');
+    const label = particularFor(reason as ReasonCode) + (family ? ` — ${FAMILY_LABEL[family] || family}` : '');
+    pushLine(label, amount, remarkFor(reason as ReasonCode) || (family ? `${rows.length} ${FAMILY_LABEL[family] || family} row(s)` : ''), reason as ReasonCode);
   }
   // Surface parser integrity gaps so an unexplained difference is attributable.
   const rdcGap = ledgerIntegrityGap(rdc);
@@ -482,7 +540,7 @@ function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: Match
   return lines;
 }
 function particularFor(reason: ReasonCode) {
-  return ({ MISSING_IN_CUSTOMER: 'Invoice/payment present in RDC not booked by customer', MISSING_IN_RDC: 'Entry accounted by customer but not in RDC', OUTSIDE_RDC_PERIOD_PRESENT_IN_CUSTOMER: 'Outside RDC period present in customer ledger', OUTSIDE_PERIOD_PRESENT_IN_RDC: 'Outside period present in RDC ledger', TDS_NOT_FOUND: 'TDS entry not found in customer ledger', TDS_JOURNAL_NOT_IN_RDC: 'TDS deducted by customer through Journal not in RDC', JOURNAL_INVOICE_NOT_IN_RDC: 'Purchase invoices booked through Journal not in RDC', JOURNAL_ADJUSTMENT_REVIEW: 'Journal adjustment requires review', LOW_PARSE_CONFIDENCE_REFERENCE_NOT_EXTRACTED: 'Reference truncated or not confidently extracted', LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW: 'Reference partial or AI review required', CUSTOMER_PAYMENT_REVERSAL_NET_ZERO: 'Customer payment reversal netted to zero' } as Record<string,string>)[reason] || reason.replace(/_/g, ' ');
+  return ({ MISSING_IN_CUSTOMER: 'Invoice/payment present in RDC not booked by customer', MISSING_IN_RDC: 'Entry accounted by customer but not in RDC', OUTSIDE_RDC_PERIOD_PRESENT_IN_CUSTOMER: 'Outside RDC period present in customer ledger', OUTSIDE_PERIOD_PRESENT_IN_RDC: 'Outside period present in RDC ledger', RDC_BEFORE_CUSTOMER_LEDGER_START: 'RDC entries before customer ledger starts (in customer opening balance)', TDS_NOT_FOUND: 'TDS entry not found in customer ledger', TDS_JOURNAL_NOT_IN_RDC: 'TDS deducted by customer through Journal not in RDC', JOURNAL_INVOICE_NOT_IN_RDC: 'Purchase invoices booked through Journal not in RDC', JOURNAL_ADJUSTMENT_REVIEW: 'Journal adjustment requires review', LOW_PARSE_CONFIDENCE_REFERENCE_NOT_EXTRACTED: 'Reference truncated or not confidently extracted', LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW: 'Reference partial or AI review required', CUSTOMER_PAYMENT_REVERSAL_NET_ZERO: 'Customer payment reversal netted to zero' } as Record<string,string>)[reason] || reason.replace(/_/g, ' ');
 }
 function remarkFor(reason: ReasonCode) {
   return ({ OUTSIDE_RDC_PERIOD_PRESENT_IN_CUSTOMER: 'Not mixed with normal unmatched customer items', TDS_JOURNAL_NOT_IN_RDC: 'Journal TDS considered in TDS compare', JOURNAL_INVOICE_NOT_IN_RDC: 'Journal invoice considered, not ignored', LOW_PARSE_CONFIDENCE_REFERENCE_NOT_EXTRACTED: 'Send to review; do not auto-match below confidence 75', LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW: 'AI/parser found only partial evidence; human approval required' } as Record<string,string>)[reason] || '';

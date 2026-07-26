@@ -9,7 +9,7 @@ import type { NormalizedTxn, ParseResult, ParserLogRow, VoucherType } from '../t
 
 type Row = Record<string, unknown> & { __rowNum__: number };
 function headerRowIndex(ws: XLSX.WorkSheet) {
-  const matrix = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '', raw: false });
+  const matrix = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '', raw: true });
   const idx = matrix.findIndex((row) => {
     const text = row.map((c) => String(c).toLowerCase()).join('|');
     return text.includes('date') && (text.includes('doc type') || text.includes('vch type') || text.includes('particulars') || text.includes('gst inv'));
@@ -25,6 +25,17 @@ function pick(row: Row, names: string[]) {
   const includeName = names.find(n => n.length >= 4 && keys.some(k => normHeader(k).includes(normHeader(n))));
   const found = includeName ? keys.find(k => normHeader(k).includes(normHeader(includeName))) : undefined;
   return found ? row[found] : undefined;
+}
+/** First NON-EMPTY value among the named columns. `pick` returns '' for blank
+ * cells, and '' defeats `??` chains — which silently left 361 Suroj RDC rows
+ * with no reference at all when GST Inv Number was blank. */
+function pickText(row: Row, names: string[]): string {
+  for (const n of names) {
+    const v = pick(row, [n]);
+    const s = v instanceof Date ? '' : String(v ?? '').trim();
+    if (s) return s;
+  }
+  return '';
 }
 function detect(rows: Row[]) {
   const headers = Object.keys(rows[0] || {}).join('|').toLowerCase();
@@ -102,7 +113,11 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
   const sourceFile = filePath.split(/[\\/]/).pop() || filePath;
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json<Row>(ws, { defval: '', raw: false, range: headerRowIndex(ws) });
+    // raw:true is REQUIRED for accuracy: raw:false returns Excel's *displayed*
+    // text, so a cell formatted without decimals ("29,250" for 29250.20) loses
+    // its paise. That silently broke amount matching and produced phantom
+    // integrity gaps (Suroj: ₹134.33).
+    const rows = XLSX.utils.sheet_to_json<Row>(ws, { defval: '', raw: true, range: headerRowIndex(ws) });
     if (!rows.length) continue;
     const kind = sourceSideHint === 'RDC' ? 'RDC' : sourceSideHint === 'CUSTOMER' ? detect(rows) : detect(rows);
     const side = sourceSideHint === 'CUSTOMER' ? 'CUSTOMER' : 'RDC';
@@ -126,8 +141,10 @@ function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out:
     const debit = absAmount(pick(row, ['Tran Dr Amt','Debit','Dr']));
     const credit = absAmount(pick(row, ['Tran Cr Amt','Credit','Cr']));
     if (!date && !debit && !credit && !particulars && !docType) continue;
-    const refs = extractReferences([particulars, String(pick(row, ['GST Inv Number','Inv / Receipt Number','Bill No','Reference']) ?? '')]);
-    const referenceNo = String(pick(row, ['GST Inv Number','Bill No','Reference','Inv / Receipt Number']) ?? refs[0] ?? '').trim();
+    const refs = extractReferences([particulars, pickText(row, ['GST Inv Number','Inv / Receipt Number','Bill No','Reference'])]);
+    // Shared invoice identity first, then anything extracted from the text,
+    // then RDC's own document number so a row is never left reference-less.
+    const referenceNo = pickText(row, ['GST Inv Number','Bill No','Reference']) || refs[0] || pickText(row, ['Inv / Receipt Number']);
     // A customer's vendor ledger in this same layout is the MIRROR of RDC's
     // export: bills sit in the credit column, payments in the debit column,
     // and the row label ("Bill Booked" / "Payment Made ...") lives in the

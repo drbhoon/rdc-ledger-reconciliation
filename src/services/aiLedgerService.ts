@@ -88,7 +88,8 @@ async function strictJsonCall<T>(name: string, schema: JsonSchema, input: unknow
     recordAiCallSuccess();
     return JSON.parse(response.output_text) as T;
   } catch (error) {
-    recordAiCallFailure();
+    const detail = error instanceof Error ? error.message : String(error);
+    recordAiCallFailure(`${name}: ${detail}`);
     console.error(`[ai] ${name} failed; continuing deterministic reconciliation`, error);
     return undefined;
   }

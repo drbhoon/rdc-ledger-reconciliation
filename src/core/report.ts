@@ -39,6 +39,7 @@ export async function writeReport(result: ReconcileResult, filePath: string) {
   addSheet(wb, 'TDS_Compare', result.tdsCompare.map(rowFromMatch));
   addSheet(wb, 'Journal_Entries_Considered', result.journalEntries.map(t => rowFromTxn(t, 'INFO', t.voucherType === 'JOURNAL_ADJUSTMENT' ? 'JOURNAL_ADJUSTMENT_REVIEW' : '')));
   addSheet(wb, 'Possible_Matches', result.possibleMatches.map(rowFromMatch));
+  addDuplicates(wb, result);
   addSheet(wb, 'Opening_Closing', result.openingClosing.map(rowFromMatch));
   addSheet(wb, 'AI_Review_Log', [
     ...(result.customer.transactions || []).filter(t => t.aiConfidence || t.aiReason || t.aiExtractedReferences?.length).map(t => rowFromTxn(t, 'INFO', 'AI_REVIEW')),
@@ -49,6 +50,47 @@ export async function writeReport(result: ReconcileResult, filePath: string) {
   result.parserLog.forEach(r=>log.addRow(r));
   log.getRow(1).font={bold:true};
   await wb.xlsx.writeFile(filePath);
+}
+/**
+ * Duplicate invoice/receipt detection WITHIN each ledger — a manual step the
+ * accounts team listed as one of their standing recon chores. Same normalized
+ * reference appearing more than once on the same side, with the amounts so a
+ * genuine part-billing can be told apart from a double posting.
+ */
+function addDuplicates(wb: ExcelJS.Workbook, result: ReconcileResult) {
+  const ws = wb.addWorksheet('Duplicates');
+  ws.columns = [
+    { key: 'side', header: 'Ledger', width: 12 },
+    { key: 'reference', header: 'Reference', width: 26 },
+    { key: 'count', header: 'Times Booked', width: 14 },
+    { key: 'total', header: 'Total Amount', width: 18 },
+    { key: 'amounts', header: 'Individual Amounts', width: 40 },
+    { key: 'dates', header: 'Dates', width: 30 },
+    { key: 'rows', header: 'Source Rows', width: 24 },
+    { key: 'types', header: 'Voucher Types', width: 24 },
+  ];
+  ws.getRow(1).font = { bold: true };
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF00' } };
+  for (const [side, txns] of [['RDC', result.rdc.transactions], ['Customer', result.customer.transactions]] as const) {
+    const byRef = new Map<string, NormalizedTxn[]>();
+    for (const t of txns) {
+      const key = t.normalizedReferenceNo;
+      if (!key || key.length < 4) continue;
+      byRef.set(key, [...(byRef.get(key) || []), t]);
+    }
+    for (const [reference, group] of [...byRef.entries()].filter(([, g]) => g.length > 1).sort((a, b) => b[1].length - a[1].length)) {
+      ws.addRow({
+        side, reference, count: group.length,
+        total: group.reduce((s, t) => s + t.signedAmountRdcView, 0),
+        amounts: group.map(t => t.signedAmountRdcView.toFixed(2)).join(', ').slice(0, 200),
+        dates: group.map(t => t.date || '?').join(', ').slice(0, 120),
+        rows: group.map(t => t.sourceRow).join(', ').slice(0, 100),
+        types: [...new Set(group.map(t => t.voucherType))].join(', '),
+      });
+    }
+  }
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  if (ws.rowCount > 1) ws.autoFilter = { from: 'A1', to: 'H1' };
 }
 function addCertificate(wb: ExcelJS.Workbook, result: ReconcileResult) {
   const c = result.cards;

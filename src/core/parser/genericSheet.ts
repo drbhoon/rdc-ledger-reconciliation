@@ -27,20 +27,23 @@ import type { NormalizedTxn, ParseResult, ParserLogRow, VoucherType } from '../t
  * the certificate — generic extraction can rescue, never silently degrade.
  */
 
-type Role = 'date' | 'docType' | 'docNo' | 'reference' | 'narration' | 'debit' | 'credit' | 'balance';
+type Role = 'date' | 'docType' | 'docNo' | 'reference' | 'narration' | 'debit' | 'credit' | 'balance' | 'signedAmount';
 
 const ROLE_PATTERNS: Array<{ role: Role; re: RegExp; priority: number }> = [
   { role: 'date', re: /^date$/i, priority: 0 },
   { role: 'date', re: /gl date|posting date|voucher date|tran date/i, priority: 1 },
   { role: 'date', re: /(^|[^a-z])date/i, priority: 2 },
   { role: 'docType', re: /doc\.?\s*type|vch type|voucher type|^type$/i, priority: 0 },
-  { role: 'docNo', re: /doc\.?\s*no|voucher no|vch no|document no/i, priority: 0 },
+  { role: 'docNo', re: /doc\.?\s*no|voucher no\.?$|vch no|document no/i, priority: 0 },
   { role: 'reference', re: /gst inv/i, priority: 0 },
-  { role: 'reference', re: /inv(oice)?\s*no|inv(oice)?\s*number|bill no|reference/i, priority: 1 },
+  { role: 'reference', re: /(voucher\s*)?ref\.?\s*(no|number)|inv(oice)?\s*no|inv(oice)?\s*number|bill no|reference/i, priority: 1 },
   { role: 'narration', re: /particular|narration|description|remarks/i, priority: 0 },
   { role: 'debit', re: /^dr|debit|dr\.?\s*amt/i, priority: 0 },
   { role: 'credit', re: /^cr|credit|cr\.?\s*amt/i, priority: 0 },
   { role: 'balance', re: /running bal|balance|(^|\s)bal(\s|\.|$)/i, priority: 0 },
+  // Columnar Tally registers carry ONE signed amount column instead of a
+  // Dr/Cr pair (Suroj: "Gross Total", positive = purchase, negative = payment).
+  { role: 'signedAmount', re: /gross total|net amount|^amount$|^amount\s*\(|voucher amount|^value$/i, priority: 0 },
 ];
 
 function mapHeader(cells: string[]): Partial<Record<Role, number>> | undefined {
@@ -57,10 +60,13 @@ function mapHeader(cells: string[]): Partial<Record<Role, number>> | undefined {
       break;
     }
   });
-  if (best.date == null || best.debit == null || best.credit == null) return undefined;
-  if (best.debit.col === best.credit.col) return undefined;
+  if (best.date == null) return undefined;
+  const hasDrCr = best.debit != null && best.credit != null && best.debit.col !== best.credit.col;
+  // Either a Dr/Cr pair OR a single signed-amount column qualifies as a ledger.
+  if (!hasDrCr && best.signedAmount == null) return undefined;
   const out: Partial<Record<Role, number>> = {};
   for (const [role, v] of Object.entries(best)) out[role as Role] = (v as { col: number }).col;
+  if (hasDrCr) delete out.signedAmount; else { delete out.debit; delete out.credit; }
   return out;
 }
 
@@ -86,7 +92,9 @@ function classifyGeneric(side: 'RDC' | 'CUSTOMER', docType: string, text: string
   if (/quick payment|payment|collection|receipt|neft|rtgs|fund trf|fund transfer/.test(t)) return cash;
   if (/credit note|credit memo/.test(t)) return 'CREDIT_NOTE';
   if (/debit note|debit memo|tcs/.test(t)) return 'DEBIT_NOTE';
-  if (/inv|sale|bill/.test(t)) return 'INVOICE';
+  if (/round\s*off/.test(t)) return 'OTHER';
+  if (/journal|\bjv\b/.test(t)) return 'JOURNAL_ADJUSTMENT';
+  if (/purchase|material|inv|sale|bill/.test(t)) return 'INVOICE';
   return 'OTHER';
 }
 
@@ -99,7 +107,8 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
   let parsedSheets = 0, duplicates = 0;
 
   for (const sheetName of wb.SheetNames) {
-    const matrix = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], { header: 1, defval: '', raw: false });
+    // raw:true — see parseExcelFile: formatted text silently drops hidden paise.
+    const matrix = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], { header: 1, defval: '', raw: true });
     let cols: Partial<Record<Role, number>> | undefined;
     let headerIdx = -1;
     for (let i = 0; i < Math.min(matrix.length, 25); i++) {
@@ -111,28 +120,68 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
       continue;
     }
     parsedSheets += 1;
-    log.push({ sourceFile, sourceSheet: sheetName, level: 'warn', message: `Generic layout adapter engaged (header row ${headerIdx + 1}); columns: ${Object.entries(cols).map(([r, c]) => `${r}=${c}`).join(' ')} — review the certificate`, confidence: 75 });
-    const cell = (row: unknown[], role: Role) => (cols![role] != null ? String(row[cols![role]!] ?? '').trim() : '');
+    const columnar = cols.signedAmount != null;
+    log.push({ sourceFile, sourceSheet: sheetName, level: 'warn', message: `Generic ${columnar ? 'columnar (single signed amount column) ' : ''}layout adapter engaged (header row ${headerIdx + 1}); columns: ${Object.entries(cols).map(([r, c]) => `${r}=${c}`).join(' ')} — review the certificate`, confidence: 75 });
+    const cell = (row: unknown[], role: Role) => {
+      if (cols![role] == null) return '';
+      const v = row[cols![role]!];
+      if (v instanceof Date) return v.toISOString().slice(0, 10);
+      return String(v ?? '').trim();
+    };
+    // Columnar registers print the column TOTAL — which IS the closing balance —
+    // in a bare row ABOVE the header (Tally) or at the very bottom. Capture it
+    // as the stated closing so the integrity gate has something to verify.
+    if (columnar && balances.closing == null) {
+      const totalRow = (idx: number) => {
+        const row = matrix[idx] as unknown[] | undefined;
+        if (!row) return undefined;
+        const amt = parseAmount(cell(row, 'signedAmount'));
+        if (!amt) return undefined;
+        // A totals row carries numbers only — no date and none of the
+        // descriptive fields (it may hold a total per column, so the count of
+        // filled cells says nothing).
+        const descriptive = (['date', 'docType', 'docNo', 'reference', 'narration'] as Role[]).some(r => cell(row, r));
+        return descriptive ? undefined : amt;
+      };
+      const total = totalRow(headerIdx - 1) ?? totalRow(matrix.length - 1);
+      if (total != null) {
+        balances.closing = total;
+        log.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: `Columnar register: closing balance ${total.toFixed(2)} taken from the amount-column total row`, confidence: 85 });
+      }
+    }
 
     for (let i = headerIdx + 1; i < matrix.length; i++) {
       const row = matrix[i] as unknown[];
       const allText = row.map(c => String(c ?? '')).join(' ');
       const date = parseDate(cell(row, 'date'));
-      const debit = Math.abs(parseAmount(cell(row, 'debit')));
-      const credit = Math.abs(parseAmount(cell(row, 'credit')));
+      // Columnar: ONE signed column. Positive = the counterparty owes more to
+      // the other side (purchase/invoice), negative = payment. Mapping it onto
+      // debit/credit per side keeps signedFromDebitCredit() consistent, so the
+      // signed amount equals the printed value on both sides.
+      const gross = columnar ? parseAmount(cell(row, 'signedAmount')) : 0;
+      const debit = columnar
+        ? (side === 'RDC' ? Math.max(gross, 0) : Math.max(-gross, 0))
+        : Math.abs(parseAmount(cell(row, 'debit')));
+      const credit = columnar
+        ? (side === 'RDC' ? Math.max(-gross, 0) : Math.max(gross, 0))
+        : Math.abs(parseAmount(cell(row, 'credit')));
       // opening / closing / total rows (label can sit in any column)
-      if (/open(ing)?\s*bal/i.test(allText) && !debit && !credit) {
+      if (/open(ing)?\s*bal/i.test(allText)) {
         const balCell = cell(row, 'balance');
-        balances.opening = balCell ? balSign * parseAmount(balCell) : 0;
+        balances.opening = columnar ? gross : (balCell ? balSign * parseAmount(balCell) : 0);
         continue;
       }
       if (/clos(ing)?\s*bal/i.test(allText)) {
         const balCell = cell(row, 'balance');
-        balances.closing = balCell ? balSign * parseAmount(balCell) : signedFromDebitCredit(side, debit, credit);
+        balances.closing = columnar ? gross : (balCell ? balSign * parseAmount(balCell) : signedFromDebitCredit(side, debit, credit));
         continue;
       }
       if (/grand total|total of|period total|\btotal\b/i.test(allText) && !date) continue;
-      if (!date || (!debit && !credit)) continue;
+      if (!debit && !credit) continue;
+      // A columnar register's column total includes every money row, even one
+      // with no date (Suroj had a stray −₹37). Dropping it would leave an
+      // unexplainable integrity gap, so keep it and flag the missing date.
+      if (!date && !columnar) continue;
 
       const docType = cell(row, 'docType');
       const narration = [cell(row, 'narration'), cell(row, 'docNo')].filter(Boolean).join(' | ');
@@ -157,10 +206,10 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
         signedAmountRdcView: signedFromDebitCredit(side, debit, credit),
         amountOriginalSign: debit ? 'Dr' : 'Cr',
         parseConfidence: referenceNo ? 85 : 78,
-        parserNotes: ['Generic layout adapter'],
+        parserNotes: ['Generic layout adapter', ...(date ? [] : ['Source row has no date'])],
       });
       const balCell = cell(row, 'balance');
-      if (balCell && (!latestBalance || date >= latestBalance.date)) {
+      if (balCell && date && (!latestBalance || date >= latestBalance.date)) {
         latestBalance = { date, value: balSign * parseAmount(balCell) };
       }
     }

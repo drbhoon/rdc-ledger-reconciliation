@@ -33,8 +33,10 @@ const ck = (label: string, cond: boolean, detail = '') => { console.log((cond ? 
     ck(`${ext}: CERTIFIED with real matches (was 0 matched)`, r.cards.certified === true && r.matches.length >= 260, `matched=${r.matches.length} verdict=${r.cards.verdict}`);
     ck(`${ext}: coverage > 95%`, Number(r.cards.matchedCoveragePct) > 95, String(r.cards.matchedCoveragePct));
     ck(`${ext}: unexplained ~ 0`, Math.abs(Number(r.cards.unexplainedDifference)) <= 1, String(r.cards.unexplainedDifference));
-    const inTransit = r.summaryLines.find(l => /accounted by customer but not in RDC/i.test(l.particular));
-    ck(`${ext}: 02-Apr 15,00,000 in-transit payment isolated as Less`, !!inTransit && Math.abs(inTransit.amount - 1500000) < 1 && inTransit.sign === 'Less', `${inTransit?.sign} ${inTransit?.amount}`);
+    // Round 9: unmatched buckets are split by document family, so the in-transit
+    // payment now has its own explicit Receipts/Payments line.
+    const inTransit = r.summaryLines.find(l => /accounted by customer but not in RDC/i.test(l.particular) && /Receipts/i.test(l.particular));
+    ck(`${ext}: 02-Apr 15,00,000 in-transit payment isolated as Less on its own Receipts line`, !!inTransit && Math.abs(inTransit.amount - 1500000) < 1 && inTransit.sign === 'Less', `${inTransit?.sign} ${inTransit?.amount}`);
     // zero-match certification block: reconcile the RDC ledger against ITSELF
     // parsed as CUSTOMER (mirror signs -> nothing matches) and require REVIEW
     if (ext === 'xlsx') {

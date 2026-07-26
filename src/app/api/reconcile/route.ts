@@ -103,9 +103,13 @@ export async function POST(req: Request) {
         { status: 422 });
     }
     if (!customer.transactions.length) {
+      const why = getAiRunState().lastError;
       return new NextResponse(
-        `Could not read any transactions from the customer ledger "${customerFile.name}" (AI text and vision rescue both failed). ` +
-        'If this is a scanned/photographed PDF, a clearer scan may work; the most reliable option is the customer ledger as Excel/CSV. Otherwise contact support with this file.',
+        `Could not read any transactions from the customer ledger "${customerFile.name}".` +
+        (aiConfig.enabled ? ' AI text and image rescue were both attempted and failed.' : ' AI rescue is disabled (set AI_ENABLED=true).') +
+        ' This happens when the PDF holds no readable text layer — a scan, a photo, or a print-to-PDF whose text is drawn as outlines.' +
+        ' The reliable fix is the customer ledger as Excel/CSV (or a Tally export).' +
+        (why ? ` Technical detail: ${why}` : ''),
         { status: 422 });
     }
     const aiUsage = emptyAiUsage(aiConfig);

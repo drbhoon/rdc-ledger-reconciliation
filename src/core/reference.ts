@@ -10,7 +10,15 @@ const DIRECT_PATTERNS = [
   /\b\d{1,2}[A-Z]{2,4}\d{2}ARMN\d+\b/gi,
 ];
 const KEYWORD_PATTERN = /(?:Bill No|Invoice No|Inv No|D No|Ref|Against|Being Bill Booked Against Invoice No\.?)[\s:#-]*([A-Z0-9][A-Z0-9/ ._-]{4,40})/gi;
-const TRUNCATED_PATTERN = /\b\d{1,2}[A-Z]{2}\d{2}[A-Z0-9]+[-/\.]*\s*(?:\.\.\.|…|$)/i;
+// A reference counts as TRUNCATED only when the source visibly cuts it off:
+// an ellipsis after it, or a dangling separator at the end of the field. The
+// previous pattern allowed a bare `$`, so every COMPLETE reference sitting at
+// the end of a cell ("2HY21ARCM10") was flagged truncated — which dropped 125
+// good Suroj rows to confidence 60 and mislabelled ₹25.5 lakh as unreadable.
+const TRUNCATED_PATTERNS = [
+  /\b\d{1,2}[A-Z]{2}\d{2}[A-Z0-9]*[-/.]?\s*(?:\.\.\.|…)/i,
+  /\b\d{1,2}[A-Z]{2}\d{2}[A-Z0-9]*[-/.]\s*$/i,
+];
 export function normalizeReference(ref?: string) {
   return (ref || '').toUpperCase().trim().replace(/[\s/_]+/g, '').replace(/[^A-Z0-9-]/g, '').replace(/--+/g, '-');
 }
@@ -48,7 +56,8 @@ export function collapseReference(ref?: string) {
 }
 
 export function hasTruncatedReference(fields: Array<string | undefined | null>) {
-  return TRUNCATED_PATTERN.test(fields.filter(Boolean).join(' | '));
+  const text = fields.filter(Boolean).join(' | ');
+  return TRUNCATED_PATTERNS.some(re => re.test(text));
 }
 export function normalizeNarration(value?: string) {
   return (value || '').toUpperCase().replace(/\b(DR|CR)\b/g, '').replace(/[0-9,]+\.\d{2}/g, '').replace(/[^A-Z0-9]+/g, ' ').trim().slice(0, 120);

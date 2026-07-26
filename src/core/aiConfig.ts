@@ -55,7 +55,7 @@ export function resetAiRunUsage() { runTokens.input = 0; runTokens.output = 0; r
  * past the hosting proxy's timeout — the run always finishes and the
  * deterministic result ships.
  */
-const runState = { deadline: Number.POSITIVE_INFINITY, consecutiveFailures: 0, tripped: false, skippedCalls: 0 };
+const runState = { deadline: Number.POSITIVE_INFINITY, consecutiveFailures: 0, tripped: false, skippedCalls: 0, lastError: '' };
 const BREAKER_THRESHOLD = 6;
 
 export function startAiRun(config = getAiConfig()) {
@@ -64,13 +64,15 @@ export function startAiRun(config = getAiConfig()) {
   runState.consecutiveFailures = 0;
   runState.tripped = false;
   runState.skippedCalls = 0;
+  runState.lastError = '';
 }
 export function aiCallAllowed(): boolean {
   if (runState.tripped || Date.now() >= runState.deadline) { runState.skippedCalls += 1; return false; }
   return true;
 }
 export function recordAiCallSuccess() { runState.consecutiveFailures = 0; }
-export function recordAiCallFailure() {
+export function recordAiCallFailure(message?: string) {
+  if (message) runState.lastError = message.slice(0, 300);
   runState.consecutiveFailures += 1;
   if (runState.consecutiveFailures >= BREAKER_THRESHOLD && !runState.tripped) {
     runState.tripped = true;
@@ -78,7 +80,7 @@ export function recordAiCallFailure() {
   }
 }
 export function getAiRunState() {
-  return { tripped: runState.tripped, skippedCalls: runState.skippedCalls, budgetExhausted: Date.now() >= runState.deadline };
+  return { tripped: runState.tripped, skippedCalls: runState.skippedCalls, budgetExhausted: Date.now() >= runState.deadline, lastError: runState.lastError };
 }
 export function addAiRunUsage(inputTokens = 0, outputTokens = 0) {
   runTokens.input += inputTokens; runTokens.output += outputTokens; runTokens.calls += 1;

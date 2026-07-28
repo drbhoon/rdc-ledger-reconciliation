@@ -62,6 +62,33 @@ function classifyRdc(doc: string, narration: string, debit: number, credit: numb
   if (/rec|receipt|payment|bank/.test(t) || credit > 0) return 'RECEIPT';
   return 'OTHER';
 }
+/**
+ * RDC's own CREDITOR (accounts-payable) ledger — used when RDC is the buyer
+ * (cement suppliers such as Dalmia). The AP convention is the mirror of the
+ * debtors ledger: a supplier's bill is a CREDIT and RDC's payment is a DEBIT,
+ * and Oracle prints the document type as STANDARD / CREDIT / DEBIT rather than
+ * INV / CM / DM. Without this, every purchase invoice was classified as a
+ * receipt, which then flipped the counterparty's signs and killed all matching.
+ */
+function classifyRdcCreditor(doc: string, narration: string, debit: number, credit: number): VoucherType {
+  const t = (doc + ' ' + narration).toLowerCase();
+  if (/opening/.test(t)) return 'OPENING';
+  if (/closing/.test(t)) return 'CLOSING';
+  // TDS/TCS first: those rows are typed CREDIT but are tax, not credit notes.
+  if (/tds|tcs|194q|194c|tax deducted/.test(t)) return 'TDS';
+  const DOC_MAP: Record<string, VoucherType> = {
+    STANDARD: 'INVOICE', INV: 'INVOICE', INVOICE: 'INVOICE',
+    CREDIT: 'CREDIT_NOTE', CM: 'CREDIT_NOTE', CN: 'CREDIT_NOTE',
+    DEBIT: 'DEBIT_NOTE', DM: 'DEBIT_NOTE', DN: 'DEBIT_NOTE',
+    PAYMENT: 'RECEIPT', PREPAYMENT: 'RECEIPT',
+  };
+  const mapped = DOC_MAP[doc.trim().toUpperCase()];
+  if (mapped) return mapped;
+  if (/quick payment|payment|neft|rtgs|cheque|fund tr/.test(t)) return 'RECEIPT';
+  if (credit > 0) return 'INVOICE';   // supplier bill
+  if (debit > 0) return 'RECEIPT';    // payment made to the supplier
+  return 'OTHER';
+}
 function classifyVendorMirror(doc: string, narration: string, debit: number, credit: number): VoucherType {
   // Customer's VENDOR ledger of RDC (payable view) exported in the same ERP
   // column layout as RDC's own debtors export — but mirrored: RDC bills are
@@ -121,8 +148,12 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
     if (!rows.length) continue;
     const kind = sourceSideHint === 'RDC' ? 'RDC' : sourceSideHint === 'CUSTOMER' ? detect(rows) : detect(rows);
     const side = sourceSideHint === 'CUSTOMER' ? 'CUSTOMER' : 'RDC';
-    parserLog.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: 'Detected ' + kind + ' ledger layout' + (kind === 'RDC' && side === 'CUSTOMER' ? ' (customer vendor-ledger mirror: bills=Cr, payments=Dr)' : ''), confidence: 90 });
-    if (kind === 'RDC') parseRdcRows(rows, sourceFile, sheetName, transactions, balances, parserLog, side);
+    // RDC's accounts-PAYABLE export (RDC is the buyer): supplier bills are
+    // credits and payments are debits — the mirror of the debtors ledger.
+    const headerText = Object.keys(rows[0] || {}).join('|').toLowerCase();
+    const creditorLedger = /creditor|vendor name|vendor site/.test(sheetName.toLowerCase() + '|' + headerText);
+    parserLog.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: 'Detected ' + kind + ' ledger layout' + (kind === 'RDC' && side === 'CUSTOMER' ? ' (customer vendor-ledger mirror: bills=Cr, payments=Dr)' : '') + (creditorLedger && side === 'RDC' ? ' (RDC creditor/payable ledger: bills=Cr, payments=Dr)' : ''), confidence: 90 });
+    if (kind === 'RDC') parseRdcRows(rows, sourceFile, sheetName, transactions, balances, parserLog, side, creditorLedger && side === 'RDC');
     else parseCustomerRows(rows, sourceFile, sheetName, transactions, balances, parserLog);
   }
   // Deterministic safety net: none of the known layouts read a single row —
@@ -132,32 +163,45 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
   }
   return { transactions, balances, parserLog };
 }
-function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[], side: 'RDC' | 'CUSTOMER' = 'RDC') {
+function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[], side: 'RDC' | 'CUSTOMER' = 'RDC', creditorLedger = false) {
   for (const row of rows) {
     const docType = String(pick(row, ['Doc Type','Voucher Type']) ?? '');
     const voucherNo = String(pick(row, ['Inv / Receipt Number','Voucher No']) ?? '');
     const particulars = [pick(row, ['Narration','Particular','Customer Name','Plant Name','Transaction Type']), Object.values(row).find(v => /Opening Balance|Closing Balance/i.test(String(v)))].filter(Boolean).join(' | ');
-    const date = parseDate(pick(row, ['Inv/ Receipt Date','Date','Voucher Date']));
+    // Invoice date before posting/GL date: it is the date the COUNTERPARTY
+    // also books, so date-tolerance matching works (creditor exports post a
+    // whole month on one GL date).
+    const date = parseDate(pick(row, ['Inv/ Receipt Date','Invoice Date','Voucher Date','GL Date','Date']));
     const debit = absAmount(pick(row, ['Tran Dr Amt','Debit','Dr']));
     const credit = absAmount(pick(row, ['Tran Cr Amt','Credit','Cr']));
     if (!date && !debit && !credit && !particulars && !docType) continue;
-    const refs = extractReferences([particulars, pickText(row, ['GST Inv Number','Inv / Receipt Number','Bill No','Reference'])]);
+    const refs = extractReferences([particulars, pickText(row, ['GST Inv Number','Invoice Number','Inv / Receipt Number','Bill No','Reference'])]);
     // Shared invoice identity first, then anything extracted from the text,
     // then RDC's own document number so a row is never left reference-less.
-    const referenceNo = pickText(row, ['GST Inv Number','Bill No','Reference']) || refs[0] || pickText(row, ['Inv / Receipt Number']);
+    const referenceNo = pickText(row, ['GST Inv Number','Bill No','Reference']) || refs[0] || pickText(row, ['Invoice Number','Inv / Receipt Number']);
     // A customer's vendor ledger in this same layout is the MIRROR of RDC's
     // export: bills sit in the credit column, payments in the debit column,
     // and the row label ("Bill Booked" / "Payment Made ...") lives in the
     // Inv / Receipt Number column.
-    const voucherType = side === 'RDC'
-      ? classifyRdc(docType, particulars + ' ' + referenceNo, debit, credit)
-      : classifyVendorMirror(docType, [voucherNo, particulars, referenceNo].join(' '), debit, credit);
+    const voucherType = side !== 'RDC'
+      ? classifyVendorMirror(docType, [voucherNo, particulars, referenceNo].join(' '), debit, credit)
+      : creditorLedger
+        ? classifyRdcCreditor(docType, particulars + ' ' + referenceNo, debit, credit)
+        : classifyRdc(docType, particulars + ' ' + referenceNo, debit, credit);
     // Summary rows: the label often sits in an unmapped column (e.g. "Grand
     // Total" under Document Seq Number), so scan EVERY cell — a missed total
     // row double-counts the entire ledger.
     const allCells = Object.values(row).map(v => String(v ?? '')).join(' ');
     if (/grand total|total of debits|period total|\btotal\b/i.test(allCells) && (debit || credit) && !date) {
       log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: 'Skipped total row' });
+      continue;
+    }
+    // UNLABELLED totals row: amounts but no date, no document number and no
+    // description (creditor exports print a bare Debit/Credit total above the
+    // closing balance). Counting it doubles the whole ledger — Dalmia Chennai
+    // was off by exactly its ₹69.9 lakh total.
+    if ((debit || credit) && !date && !referenceNo && !docType && !particulars.trim()) {
+      log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: 'Skipped unlabelled total row (amounts with no date, document number or description)' });
       continue;
     }
     const txn = buildTxn({ sourceSide: side, sourceFile, sourceSheet, sourceRow: row.__rowNum__, date, voucherType, voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo || refs[0]), extractedReferences: refs, chequeNo: extractChequeNo([particulars, voucherNo, referenceNo]), particulars: [voucherNo, particulars].filter(Boolean).join(' | '), narration: [voucherNo, particulars].filter(Boolean).join(' | '), debit, credit, signedAmountRdcView: signedFromDebitCredit(side, debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: hasTruncatedReference([particulars, referenceNo]) ? 60 : 90, parserNotes: [] });

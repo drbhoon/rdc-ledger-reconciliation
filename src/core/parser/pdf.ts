@@ -80,6 +80,14 @@ export async function parsePdfFile(filePath: string, sourceSide: PdfSide = 'CUST
     spacedLines = lines;
     parserLog.push({ sourceFile, level: 'warn', message: 'Geometry-aware extraction failed; falling back to plain text', confidence: 50 });
   }
+  // SAP "Statement of Account" (Dalmia Cement) — fixed columns anchored by a
+  // "<amount>Dr|Cr" running balance. Checked first: its rows also loosely
+  // resemble other layouts, and this one reads them exactly.
+  const statement = parseSapStatementPdf(spacedLines.length ? spacedLines : lines, sourceFile, sourceSide);
+  if (statement.transactions.length) {
+    statement.parserLog.unshift(...parserLog);
+    return statement;
+  }
   const compact = parseCompactPdfLedger(spacedLines.length ? spacedLines : lines, sourceFile, sourceSide);
   if (compact.transactions.length || compact.balances.opening || compact.balances.closing) {
     compact.parserLog.unshift(...parserLog);
@@ -168,6 +176,96 @@ function parseChunk(chunk: { startLine: number; lines: string[] }, sourceFile: s
     parseConfidence: notes.includes('LOW_PARSE_CONFIDENCE_REFERENCE_NOT_EXTRACTED') ? 55 : refs.length ? 88 : 75,
     parserNotes: notes,
   };
+}
+
+/**
+ * SAP "Statement of Account" PDF (Dalmia Cement and the same SAP report used by
+ * other cement suppliers). One line per transaction:
+ *
+ *   01.04.2026 Open                     1,35,48,995.25 1,35,48,995.25Dr
+ *   11.04.2026 INV  2600503191 DDSP PPC 39.46 2,14,189.00 0.00 1,37,63,184.25Dr 1,81,516.12 32,672.88 TN20DF8816
+ *   16.04.2026 COLL 0047000070                0.00 1,64,856.61 1,55,14,629.64Dr 0.00 0.00 203886
+ *
+ * The "<amount>Dr|Cr" running balance is the anchor: the two money tokens
+ * immediately before it are always Dr and Cr, whether or not the row carries a
+ * product and quantity. That avoids the qty-vs-amount confusion that fixed
+ * column-position parsing hits on these statements.
+ */
+function parseSapStatementPdf(lines: string[], sourceFile: string, sourceSide: PdfSide): ParseResult {
+  const transactions: NormalizedTxn[] = [];
+  const balances: ParseResult['balances'] = { openingRows: [], closingRows: [] };
+  const parserLog: ParseResult['parserLog'] = [];
+  const looksLikeStatement = lines.some(l => /Statement of Account for the period/i.test(l))
+    && lines.some(l => /Dr\.\s*Amt|Running Bal/i.test(l));
+  if (!looksLikeStatement) return { transactions, balances, parserLog };
+
+  const BAL_ANCHOR = /([\d,]+\.\d{2})\s*(Dr|Cr)\b/i;
+  const MONEY = /-?[\d,]+\.\d{2}-?/g;
+  // Dr in the counterparty's statement = they are owed; in the RDC-receivable
+  // view used across the app that is a negative (RDC owes), which is exactly
+  // signedFromDebitCredit('CUSTOMER', debit, credit).
+  const signedBalance = (amount: number, drcr: string) => (/dr/i.test(drcr) ? -amount : amount);
+
+  for (const line of lines) {
+    const closing = line.match(/Closing Balance as on\s+[\d.]+\s*RS\.?\s*([\d,]+\.\d{2})\s*(Dr|Cr)/i);
+    if (closing) {
+      balances.closing = signedBalance(parseAmount(closing[1]), closing[2]);
+      continue;
+    }
+    const head = line.match(/^(\d{2}\.\d{2}\.\d{4})\s+(\S+)\s*(.*)$/);
+    if (!head) continue;
+    const [, dateText, docTypeRaw, rest] = head;
+    const anchor = rest.match(BAL_ANCHOR);
+    if (!anchor) continue;
+    const before = rest.slice(0, anchor.index);
+    const after = rest.slice((anchor.index ?? 0) + anchor[0].length);
+    const money = before.match(MONEY) || [];
+
+    // "01.04.2026 Open 1,35,48,995.25 1,35,48,995.25Dr" — opening balance row.
+    if (/^open/i.test(docTypeRaw)) {
+      balances.opening = signedBalance(parseAmount(anchor[1]), anchor[2]);
+      continue;
+    }
+    if (/^total$/i.test(docTypeRaw)) continue;
+
+    // Doc No is the first token of `before` when it is not a money value.
+    const firstToken = before.trim().split(/\s+/)[0] || '';
+    const docNo = /^[\d,]+\.\d{2}$/.test(firstToken) ? '' : firstToken;
+    const debit = Math.abs(parseAmount(money[money.length - 2] ?? '0'));
+    const credit = Math.abs(parseAmount(money[money.length - 1] ?? '0'));
+    if (!debit && !credit) continue;
+    const date = parseDate(dateText.replace(/\./g, '/'));
+    // Everything after base/GST values is the narration (vehicle no, reference).
+    const particulars = after.replace(MONEY, '').replace(/\s+/g, ' ').trim();
+    const docType = docTypeRaw.toUpperCase();
+    const voucherType: VoucherType =
+      docType === 'INV' ? 'INVOICE'
+      : docType === 'COLL' ? (sourceSide === 'RDC' ? 'RECEIPT' : 'PAYMENT')
+      : docType === 'DN' ? 'DEBIT_NOTE'
+      : docType === 'CN' || docType === 'CM' ? 'CREDIT_NOTE'
+      : /tds|tcs/i.test(docType) ? 'TDS'
+      : 'OTHER';
+    const refs = extractReferences([docNo, particulars]);
+    transactions.push({
+      id: uuid(), sourceSide, sourceFile, sourceRow: transactions.length + 1,
+      date, voucherType, voucherNo: docNo, referenceNo: docNo || refs[0] || '',
+      normalizedReferenceNo: normalizeReference(docNo || refs[0]),
+      extractedReferences: refs.length ? refs : (docNo ? [docNo] : []),
+      chequeNo: extractChequeNo([particulars]),
+      allocationType: 'Inferred',
+      particulars: [docType, particulars].filter(Boolean).join(' | ').slice(0, 200),
+      narration: [docType, docNo, particulars].filter(Boolean).join(' | ').slice(0, 400),
+      debit, credit,
+      signedAmountRdcView: signedFromDebitCredit(sourceSide, debit, credit),
+      amountOriginalSign: debit ? 'Dr' : 'Cr',
+      parseConfidence: docNo ? 88 : 78,
+      parserNotes: ['SAP statement-of-account PDF adapter'],
+    });
+  }
+  if (transactions.length) {
+    parserLog.push({ sourceFile, level: 'info', message: `Parsed ${transactions.length} rows using the SAP statement-of-account PDF adapter (running-balance anchored)`, confidence: 88 });
+  }
+  return { transactions, balances, parserLog };
 }
 
 function parseCompactPdfLedger(lines: string[], sourceFile: string, sourceSide: PdfSide): ParseResult {

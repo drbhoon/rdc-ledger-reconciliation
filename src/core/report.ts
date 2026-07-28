@@ -39,6 +39,9 @@ export async function writeReport(result: ReconcileResult, filePath: string) {
   addSheet(wb, 'TDS_Compare', result.tdsCompare.map(rowFromMatch));
   addSheet(wb, 'Journal_Entries_Considered', result.journalEntries.map(t => rowFromTxn(t, 'INFO', t.voucherType === 'JOURNAL_ADJUSTMENT' ? 'JOURNAL_ADJUSTMENT_REVIEW' : '')));
   addSheet(wb, 'Possible_Matches', result.possibleMatches.map(rowFromMatch));
+  // Same reference, wildly different amounts — usually a mis-read figure.
+  // Given its own sheet so it cannot hide among hundreds of matched rows.
+  addSheet(wb, 'Large_Variance_Check', (result.largeVarianceMatches || []).map(rowFromMatch));
   addDuplicates(wb, result);
   addSheet(wb, 'Opening_Closing', result.openingClosing.map(rowFromMatch));
   addSheet(wb, 'AI_Review_Log', [

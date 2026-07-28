@@ -54,7 +54,7 @@ export type BalanceSet = { opening?: number; closing?: number; openingRows?: Nor
 export type ParseResult = { transactions: NormalizedTxn[]; balances: BalanceSet; parserLog: ParserLogRow[]; period?: { start?: string; end?: string } };
 export type ParserLogRow = { sourceFile: string; sourceSheet?: string; sourcePage?: number; sourceRow?: string | number; level: 'info' | 'warn' | 'error'; message: string; confidence?: number };
 export type ReconcileOptions = { partyName: string; periodStart: string; periodEnd: string; invoiceTolerance: number; paymentTolerance: number; invoiceDateToleranceDays: number; paymentDateToleranceDays: number };
-export type MatchRow = { matchId: string; matchStatus: 'MATCHED' | 'POSSIBLE' | 'EXCEPTION' | 'INFO'; reasonCode?: ReasonCode; rdcTxn?: NormalizedTxn; customerTxn?: NormalizedTxn; rdcAmount?: number; customerAmount?: number; difference: number; confidence: number; remarks?: string; suggestion?: string };
+export type MatchRow = { matchId: string; matchStatus: 'MATCHED' | 'POSSIBLE' | 'EXCEPTION' | 'INFO'; reasonCode?: ReasonCode; rdcTxn?: NormalizedTxn; customerTxn?: NormalizedTxn; rdcAmount?: number; customerAmount?: number; difference: number; confidence: number; remarks?: string; suggestion?: string; largeVariance?: boolean };
 export type SummaryLine = { sign: '' | 'Add' | 'Less'; particular: string; amount: number; remarks?: string; reasonCode?: ReasonCode; contribution?: number };
 export type AiUsageStats = {
   enabled: boolean;
@@ -70,4 +70,4 @@ export type AiUsageStats = {
   outputTokens?: number;
   estimatedCostUsd?: number;
 };
-export type ReconcileResult = { options: ReconcileOptions; rdc: ParseResult; customer: ParseResult; matches: MatchRow[]; possibleMatches: MatchRow[]; unmatchedRdc: MatchRow[]; unmatchedCustomer: MatchRow[]; outsidePeriodCustomer: MatchRow[]; netZeroReversals: NormalizedTxn[]; tdsCompare: MatchRow[]; journalEntries: NormalizedTxn[]; openingClosing: MatchRow[]; summaryLines: SummaryLine[]; parserLog: ParserLogRow[]; cards: Record<string, number | boolean | string>; aiUsage?: AiUsageStats };
+export type ReconcileResult = { largeVarianceMatches?: MatchRow[]; options: ReconcileOptions; rdc: ParseResult; customer: ParseResult; matches: MatchRow[]; possibleMatches: MatchRow[]; unmatchedRdc: MatchRow[]; unmatchedCustomer: MatchRow[]; outsidePeriodCustomer: MatchRow[]; netZeroReversals: NormalizedTxn[]; tdsCompare: MatchRow[]; journalEntries: NormalizedTxn[]; openingClosing: MatchRow[]; summaryLines: SummaryLine[]; parserLog: ParserLogRow[]; cards: Record<string, number | boolean | string>; aiUsage?: AiUsageStats };

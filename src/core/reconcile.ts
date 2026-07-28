@@ -307,6 +307,33 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     }));
   }
 
+  // ── Large-variance guard on reference-matched pairs ─────────────────────
+  // Reference-first matching deliberately pairs rows whose amounts differ (TDS,
+  // rounding, short billing) and reports the difference. But a pair differing
+  // by MULTIPLES is not a booking difference — it is almost always a mis-read
+  // figure, and it must not sit quietly in Matched_Invoices. ELAN 2026-07:
+  // 3CH26ARMN233 was RDC ₹1,90,399.90 vs a transcribed ₹19,04,000 (10x).
+  for (const m of matches) {
+    const rdcAmt = Math.abs(m.rdcAmount || 0);
+    const custAmt = Math.abs(m.customerAmount || 0);
+    const diff = Math.abs((m.rdcAmount || 0) - (m.customerAmount || 0));
+    const larger = Math.max(rdcAmt, custAmt);
+    const smaller = Math.min(rdcAmt, custAmt);
+    if (!larger || diff <= Math.max(options.invoiceTolerance, 1)) continue;
+    if (diff <= larger * 0.25) continue;
+    const ratio = smaller > 0 ? larger / smaller : Number.POSITIVE_INFINITY;
+    const decimalSlip = [10, 100, 1000].some(k => Math.abs(ratio - k) <= k * 0.01);
+    const aiRow = [m.rdcTxn, m.customerTxn].some(t => t?.parserNotes?.some(n => /AI-extracted/i.test(n)));
+    m.reasonCode = 'AMOUNT_MISMATCH';
+    m.largeVariance = true;
+    m.remarks = [
+      m.remarks,
+      `LARGE VARIANCE: ${decimalSlip
+        ? `the two figures differ by almost exactly ${Math.round(ratio)}x — typically a digit or decimal mis-read when the ledger was transcribed`
+        : `the two figures differ by ${((diff / larger) * 100).toFixed(0)}% of the larger amount`}${aiRow ? ' (one side was AI-extracted from an unreadable file)' : ''}. Verify against the source ledger before relying on this line.`,
+    ].filter(Boolean).join('; ');
+  }
+
   // A pair the invoice pass could only flag as "possible" may since have been
   // PROPERLY matched by the grouped payment pass — drop those stale review
   // flags, they were pure noise on the Possible_Matches sheet (Dalmia: 126
@@ -451,7 +478,7 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   const cards = { matchedCount: matches.length, possibleCount: possibleMatches.length, unmatchedRdcCount: unmatchedRdc.length, unmatchedCustomerCount: unmatchedCustomer.length, outsidePeriodCustomerCount: outsidePeriodCustomer.length, netZeroReversalCount: netZeroReversals.length, journalEntriesConsidered: journalEntries.length, tdsExceptionCount: tdsCompare.filter(t => t.matchStatus !== 'MATCHED').length, unexplainedDifference: unexplained, rdcLedgerIntegrityGap: Math.round((rdcGap || 0) * 100) / 100, customerLedgerIntegrityGap: Math.round((custGap || 0) * 100) / 100, matchedCoveragePct, certified, verdict };
   if (rdcGap != null && Math.abs(rdcGap) > 1) rdc.parserLog.push({ sourceFile: rdc.transactions[0]?.sourceFile || 'rdc', level: 'error', message: `RDC ledger integrity check FAILED: parsed rows differ from stated closing balance by ${rdcGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });
   if (custGap != null && Math.abs(custGap) > 1) customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'error', message: `Customer ledger integrity check FAILED: parsed rows differ from stated closing balance by ${custGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });
-  return { options, rdc, customer: { ...customer, transactions: activeCustomer }, matches, possibleMatches, unmatchedRdc, unmatchedCustomer, outsidePeriodCustomer, netZeroReversals: [...netZeroReversals, ...rdcReversalNetted], tdsCompare, journalEntries, openingClosing, summaryLines, parserLog: [...rdc.parserLog, ...customer.parserLog], cards };
+  return { largeVarianceMatches: matches.filter(m => m.largeVariance), options, rdc, customer: { ...customer, transactions: activeCustomer }, matches, possibleMatches, unmatchedRdc, unmatchedCustomer, outsidePeriodCustomer, netZeroReversals: [...netZeroReversals, ...rdcReversalNetted], tdsCompare, journalEntries, openingClosing, summaryLines, parserLog: [...rdc.parserLog, ...customer.parserLog], cards };
 }
 function reasonForRdc(t: NormalizedTxn): ReasonCode {
   if (t.parserNotes?.includes('LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW')) return 'LOW_PARSE_CONFIDENCE_REFERENCE_REVIEW';

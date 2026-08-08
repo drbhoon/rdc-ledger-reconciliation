@@ -261,7 +261,13 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     // Group ONLY allocation children under their parent voucher. Standalone
     // payment rows stay individual — voucherNo can be a non-unique label like
     // "PAYMENT" and must never merge unrelated payments into one group.
-    const key = c.parentVoucherNo ? `P:${c.parentVoucherNo}` : c.id;
+    // One cheque settled through several vouchers is the other legitimate
+    // grouping: Senghani paid ₹9,73,808 as four vouchers under cheque 006557,
+    // which RDC received as a single receipt. Keyed with the year so a reused
+    // cheque number cannot merge payments from different years.
+    const key = c.parentVoucherNo ? `P:${c.parentVoucherNo}`
+      : c.chequeNo ? `Q:${c.chequeNo}:${(c.date || '').slice(0, 4)}`
+      : c.id;
     paymentGroups.set(key, [...(paymentGroups.get(key) || []), c]);
   }
   for (const [voucher, group] of paymentGroups) {
@@ -301,6 +307,36 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
         ? `Customer payment voucher ${voucher} (${group.length} invoice allocations totalling ${total.toFixed(2)}) matched to RDC receipt ${receipt.voucherNo || ''}`
         : `Customer payment ${voucher} matched to RDC receipt ${receipt.voucherNo || ''} by amount`,
     }));
+  }
+
+  // ── RDC invoice cancelled by its own credit note ────────────────────────
+  // "Wrong invoice cancelled": RDC raises an invoice and immediately reverses
+  // it with a credit memo. The customer never books either, so both sides show
+  // up as disputed items — Senghani had 163 such pairs worth ₹70 lakh cluttering
+  // the statement. Netted here exactly as an accountant would.
+  {
+    const openInvoices = rdcInPeriod.filter(t => !usedRdc.has(t.id) && t.voucherType === 'INVOICE');
+    for (const note of rdcInPeriod) {
+      if (usedRdc.has(note.id) || note.voucherType !== 'CREDIT_NOTE') continue;
+      const target = Math.abs(note.signedAmountRdcView);
+      if (target < 0.01) continue;
+      let pick: { txn: NormalizedTxn; days: number } | undefined;
+      for (const invoice of openInvoices) {
+        if (usedRdc.has(invoice.id)) continue;
+        // Must cancel EXACTLY. Netting a pair that is a rupee apart would
+        // quietly drop that rupee out of the statement's identity.
+        if (Math.abs(invoice.signedAmountRdcView + note.signedAmountRdcView) > 0.01) continue;
+        const days = daysBetween(invoice.date, note.date);
+        if (days > 45) continue;
+        if (!pick || days < pick.days) pick = { txn: invoice, days };
+      }
+      if (!pick) continue;
+      usedRdc.add(note.id); usedRdc.add(pick.txn.id);
+      for (const t of [pick.txn, note]) {
+        t.parserNotes = [...(t.parserNotes || []), 'RDC invoice cancelled by credit note (net zero)'];
+        rdcReversalNetted.push(t);
+      }
+    }
   }
 
   // ── Near-reference second pass ──────────────────────────────────────────
@@ -374,6 +410,43 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   for (let i = possibleMatches.length - 1; i >= 0; i--) {
     const p = possibleMatches[i];
     if ((p.rdcTxn && usedRdc.has(p.rdcTxn.id)) || (p.customerTxn && usedCust.has(p.customerTxn.id))) possibleMatches.splice(i, 1);
+  }
+
+  // ── Leftover payments: same money, different figure ─────────────────────
+  // A payment received short (TDS withheld at source, bank charges, a part
+  // recovery) never matches on amount, so both sides show up as "missing" and
+  // the statement carries two large gross lines instead of one net one. Pair
+  // them when they are close in date and within 5%, and report the shortfall —
+  // which is exactly the "Short/Excess" line an accountant writes.
+  {
+    const leftoverRdcPayments = rdcInPeriod.filter(t => !usedRdc.has(t.id) && paymentTypes.includes(t.voucherType));
+    const leftoverCustPayments = customerInPeriod.filter(t => !usedCust.has(t.id) && paymentTypes.includes(t.voucherType));
+    for (const r of leftoverRdcPayments) {
+      if (usedRdc.has(r.id)) continue;
+      const amount = Math.abs(r.signedAmountRdcView);
+      if (amount < 1) continue;
+      let pick: { txn: NormalizedTxn; days: number; gap: number } | undefined;
+      for (const c of leftoverCustPayments) {
+        if (usedCust.has(c.id)) continue;
+        if (Math.sign(c.signedAmountRdcView) !== Math.sign(r.signedAmountRdcView)) continue;
+        const other = Math.abs(c.signedAmountRdcView);
+        const gap = Math.abs(other - amount);
+        if (gap > Math.max(amount, other) * 0.05) continue;
+        const days = daysBetween(r.date, c.date);
+        if (days > options.paymentDateToleranceDays) continue;
+        if (!pick || days < pick.days || (days === pick.days && gap < pick.gap)) pick = { txn: c, days, gap };
+      }
+      if (!pick) continue;
+      usedRdc.add(r.id); usedCust.add(pick.txn.id);
+      matches.push(matchRow({
+        matchStatus: 'MATCHED', reasonCode: 'PAYMENT_AMOUNT_MISMATCH',
+        rdcTxn: r, customerTxn: pick.txn,
+        rdcAmount: r.signedAmountRdcView, customerAmount: pick.txn.signedAmountRdcView,
+        difference: r.signedAmountRdcView - pick.txn.signedAmountRdcView,
+        confidence: 78,
+        remarks: `Payment matched on amount and date (${pick.days} day(s) apart); the two figures differ by ${pick.gap.toFixed(2)} — check for tax withheld at source, bank charges or a short receipt`,
+      }));
+    }
   }
 
   // Unmatched customer payment ALLOCATION children are re-aggregated to their

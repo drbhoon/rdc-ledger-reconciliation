@@ -5,6 +5,7 @@ import { absAmount, parseAmount, signedFromDebitCredit } from '../amount';
 import { parseDate } from '../date';
 import { extractChequeNo, extractReferences, hasTruncatedReference, normalizeReference } from '../reference';
 import { parseGenericWorkbook } from './genericSheet';
+import { parseSplitVoucherWorkbook } from './splitVoucherSheet';
 import type { NormalizedTxn, ParseResult, ParserLogRow, PrintedTotals, VoucherType } from '../types';
 
 type Row = Record<string, unknown> & { __rowNum__: number };
@@ -139,6 +140,11 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
   const balances: ParseResult['balances'] = { openingRows: [], closingRows: [] };
   const printedTotals: PrintedTotals = {};
   const sourceFile = filePath.split(/[\\/]/).pop() || filePath;
+  // ERP exports that split one voucher across several account rows must be
+  // regrouped before anything else reads them row by row.
+  if (parseSplitVoucherWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog, printedTotals) && transactions.length) {
+    return { transactions, balances, parserLog, printedTotals: (printedTotals.debit || printedTotals.credit) ? printedTotals : undefined };
+  }
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];
     // raw:true is REQUIRED for accuracy: raw:false returns Excel's *displayed*

@@ -3,6 +3,7 @@ import path from 'path';
 import { NextResponse } from 'next/server';
 import { v4 as uuid } from 'uuid';
 import { extractRawText, parseLedger } from '@/core/parser';
+import { auditLedger, describeAudit } from '@/core/audit';
 import { ledgerIntegrityGap, reconcile } from '@/core/reconcile';
 import { writeReport } from '@/core/report';
 import { emptyAiUsage, estimateCostUsd, getAiConfig, getAiRunState, getAiRunUsage, startAiRun, type AiConfig } from '@/core/aiConfig';
@@ -58,8 +59,18 @@ async function withAiRescue(parsed: ParseResult, filePath: string, fileName: str
     const newAbs = rescuedGap == null ? Number.POSITIVE_INFINITY : Math.abs(rescuedGap);
     const acceptOnZeroRows = unreadable && rescued.transactions.length > 0;
     if (newAbs < oldAbs || (acceptOnZeroRows && !(newAbs > oldAbs))) {
+      // AI-extracted values must PROVE themselves: the rows have to reproduce
+      // the document's own running balance and printed totals. An extraction
+      // that cannot be verified is refused rather than shown — a wrong figure
+      // presented confidently is worse than no reconciliation.
+      rescued.audit = auditLedger(rescued, side);
+      if (rescued.audit.verdict !== 'PASS') {
+        parsed.parserLog.push({ sourceFile: fileName, level: 'error', message: `AI rescue REFUSED: ${rescued.audit.verdict === 'NOT_VERIFIABLE' ? 'the file prints no running balance or totals, so the AI reading of the amounts could not be proved' : 'the extracted rows failed the arithmetic self-audit'} (${describeAudit(rescued.audit)}). Extracted values were NOT used — an unverified figure is worse than none.`, confidence: 0 });
+        console.warn(`[reconcile] AI rescue refused for ${fileName}: ${describeAudit(rescued.audit)}`);
+        return parsed;
+      }
       rescued.parserLog.unshift(...parsed.parserLog);
-      rescued.parserLog.push({ sourceFile: fileName, level: 'warn', message: `AI rescue ACCEPTED: integrity gap ${gap == null ? 'n/a' : gap.toFixed(2)} -> ${rescuedGap == null ? 'n/a' : rescuedGap.toFixed(2)} (${rescued.transactions.length} rows). Review the certificate before relying on this run.`, confidence: 70 });
+      rescued.parserLog.push({ sourceFile: fileName, level: 'warn', message: `AI rescue ACCEPTED: integrity gap ${gap == null ? 'n/a' : gap.toFixed(2)} -> ${rescuedGap == null ? 'n/a' : rescuedGap.toFixed(2)} (${rescued.transactions.length} rows); self-audit ${rescued.audit.verdict}. Review the certificate before relying on this run.`, confidence: 70 });
       return rescued;
     }
     parsed.parserLog.push({ sourceFile: fileName, level: 'warn', message: `AI rescue rejected (gap ${rescuedGap == null ? 'n/a' : rescuedGap.toFixed(2)} not better than ${gap == null ? 'n/a' : gap.toFixed(2)}); keeping deterministic parse`, confidence: 50 });
@@ -111,6 +122,22 @@ export async function POST(req: Request) {
         ' The reliable fix is the customer ledger as Excel/CSV (or a Tally export).' +
         (why ? ` Technical detail: ${why}` : ''),
         { status: 422 });
+    }
+    // Prove both parses before reconciling anything.
+    rdc.audit = rdc.audit ?? auditLedger(rdc, 'RDC');
+    customer.audit = customer.audit ?? auditLedger(customer, 'CUSTOMER');
+    for (const side of [rdc, customer]) {
+      const a = side.audit!;
+      side.parserLog.push({
+        sourceFile: side.transactions[0]?.sourceFile || 'ledger',
+        level: a.verdict === 'FAIL' ? 'error' : a.verdict === 'NOT_VERIFIABLE' ? 'warn' : 'info',
+        message: `Parse self-audit — ${describeAudit(a)}`,
+        confidence: a.verdict === 'PASS' ? 100 : a.verdict === 'NOT_VERIFIABLE' ? 50 : 0,
+      });
+      for (const issue of a.issues.slice(0, 50)) {
+        side.parserLog.push({ sourceFile: side.transactions[0]?.sourceFile || 'ledger', sourceRow: issue.sourceRow, level: 'error', message: `Row failed self-audit (${issue.reference || 'no reference'}, ${issue.date || 'no date'}): ${issue.message}`, confidence: 0 });
+      }
+      console.log(`[reconcile] ${runId} ${describeAudit(a)}`);
     }
     const aiUsage = emptyAiUsage(aiConfig);
     const customerAiUsage = await aiEnhanceParseResult(customer, 'CUSTOMER', aiConfig);

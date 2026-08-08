@@ -43,6 +43,9 @@ export type NormalizedTxn = {
   isNetZeroReversal?: boolean;
   parseConfidence: number;
   parserNotes?: string[];
+  /** Running balance printed on the row, in the RDC-receivable view. Lets the
+   *  parse be proved row by row against the ledger's own arithmetic. */
+  runningBalance?: number;
   aiExtractedReferences?: string[];
   aiSuggestedVoucherType?: VoucherType;
   aiConfidence?: number;
@@ -51,7 +54,22 @@ export type NormalizedTxn = {
 };
 
 export type BalanceSet = { opening?: number; closing?: number; openingRows?: NormalizedTxn[]; closingRows?: NormalizedTxn[] };
-export type ParseResult = { transactions: NormalizedTxn[]; balances: BalanceSet; parserLog: ParserLogRow[]; period?: { start?: string; end?: string } };
+
+export type ParseResult = { transactions: NormalizedTxn[]; balances: BalanceSet; parserLog: ParserLogRow[]; period?: { start?: string; end?: string }; printedTotals?: PrintedTotals; audit?: LedgerAudit };
+/** Debit/credit totals the source document prints for itself. */
+export type PrintedTotals = { debit?: number; credit?: number; sheet?: string };
+export type RowAuditIssue = { sourceRow: string | number; date?: string; reference?: string; parsedAmount: number; expectedAmount: number; delta: number; message: string };
+export type LedgerAudit = {
+  side: 'RDC' | 'CUSTOMER';
+  verdict: 'PASS' | 'FAIL' | 'NOT_VERIFIABLE';
+  checks: string[];
+  rowsChecked: number;
+  issues: RowAuditIssue[];
+  printedDebitTotal?: number; parsedDebitTotal?: number; debitTotalGap?: number;
+  printedCreditTotal?: number; parsedCreditTotal?: number; creditTotalGap?: number;
+  integrityGap?: number;
+  aiExtractedRows: number;
+};
 export type ParserLogRow = { sourceFile: string; sourceSheet?: string; sourcePage?: number; sourceRow?: string | number; level: 'info' | 'warn' | 'error'; message: string; confidence?: number };
 export type ReconcileOptions = { partyName: string; periodStart: string; periodEnd: string; invoiceTolerance: number; paymentTolerance: number; invoiceDateToleranceDays: number; paymentDateToleranceDays: number };
 export type MatchRow = { matchId: string; matchStatus: 'MATCHED' | 'POSSIBLE' | 'EXCEPTION' | 'INFO'; reasonCode?: ReasonCode; rdcTxn?: NormalizedTxn; customerTxn?: NormalizedTxn; rdcAmount?: number; customerAmount?: number; difference: number; confidence: number; remarks?: string; suggestion?: string; largeVariance?: boolean };

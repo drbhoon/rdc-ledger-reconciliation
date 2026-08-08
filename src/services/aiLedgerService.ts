@@ -363,6 +363,9 @@ export type AiLedgerRow = {
   narration: string;
   debit: number;
   credit: number;
+  /** Running/closing balance printed on the row, "" when the ledger shows none.
+   *  This is what lets an AI extraction be proved row by row instead of trusted. */
+  runningBalance: string;
 };
 
 const rescueSchema: JsonSchema = {
@@ -382,8 +385,9 @@ const rescueSchema: JsonSchema = {
           narration: { type: 'string' },
           debit: { type: 'number' },
           credit: { type: 'number' },
+          runningBalance: { type: 'string' },
         },
-        required: ['date', 'voucherType', 'voucherNo', 'reference', 'narration', 'debit', 'credit'],
+        required: ['date', 'voucherType', 'voucherNo', 'reference', 'narration', 'debit', 'credit', 'runningBalance'],
       },
     },
   },
@@ -421,6 +425,20 @@ export function aiRowsToParseResult(rows: AiLedgerRow[], sourceFile: string, sou
       amountOriginalSign: debit ? 'Dr' : 'Cr',
       parseConfidence: 70,
       parserNotes: ['AI-extracted row (rescue parser)'],
+      // Captured so the extraction can be PROVED against the ledger's own
+      // arithmetic; a mis-read figure then fails its row instead of shipping.
+      runningBalance: (() => {
+        const text = String(r.runningBalance ?? '').trim();
+        if (!text) return undefined;
+        const value = parseAmount(text);
+        if (!Number.isFinite(value) || value === 0) return undefined;
+        // "1,23,456.78 Dr" in a counterparty statement means they are owed.
+        const isDr = /\bdr\b/i.test(text);
+        const isCr = /\bcr\b/i.test(text);
+        const magnitude = Math.abs(value);
+        if (isDr || isCr) return sourceSide === 'RDC' ? (isDr ? magnitude : -magnitude) : (isDr ? -magnitude : magnitude);
+        return value;
+      })(),
     });
   }
   return { transactions, balances, parserLog: [] };
@@ -441,7 +459,7 @@ export async function aiRescueParse(rawText: string, sourceFile: string, sourceS
   let failed = 0;
   await mapLimit(chunks.map((c, idx) => ({ c, idx })), config.concurrency, async ({ c, idx }) => {
     const out = await strictJson<{ rows: AiLedgerRow[] }>('ledger_rescue_extraction', rescueSchema, {
-      task: 'Extract EVERY transaction row from this Indian accounting ledger text chunk. One output row per ledger transaction. Amounts as plain numbers. Include Opening/Closing Balance rows with voucherType OPENING/CLOSING. Skip page headers, column headers, totals and carried-forward lines.',
+      task: 'Extract EVERY transaction row from this Indian accounting ledger text chunk. One output row per ledger transaction. Amounts as plain numbers (1,23,456.78 becomes 123456.78 — copy every digit exactly, do not round). If the row shows a running/closing balance, copy it verbatim into runningBalance including any Dr/Cr suffix; use "" when the ledger shows none. Include Opening/Closing Balance rows with voucherType OPENING/CLOSING. Skip page headers, column headers, totals and carried-forward lines.',
       sourceSide,
       chunkIndex: idx,
       text: c,
@@ -516,7 +534,7 @@ export async function aiVisionRescueParse(filePath: string, sourceFile: string, 
       role: 'user',
       content: [
         { type: 'input_file', filename: `${sourceFile.replace(/\.pdf$/i, '')}-part${idx + 1}.pdf`, file_data: `data:application/pdf;base64,${c.toString('base64')}` },
-        { type: 'input_text', text: prompt(chunks.length > 1 ? `pages part ${idx + 1} of ${chunks.length}` : 'complete document') },
+        { type: 'input_text', text: prompt(chunks.length > 1 ? `pages part ${idx + 1} of ${chunks.length}` : 'complete document') + ' If each row shows a running/closing balance, copy it verbatim into runningBalance including any Dr/Cr suffix — it is used to verify your reading of the amounts.' },
       ],
     }];
     const out = await strictJsonCall<{ rows: AiLedgerRow[] }>('ledger_vision_rescue_extraction', rescueSchema, payload, config, Math.max(config.requestTimeoutMs, 120_000));

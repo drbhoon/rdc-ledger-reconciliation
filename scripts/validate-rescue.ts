@@ -14,12 +14,12 @@ const ck = (label: string, cond: boolean, detail = '') => { console.log((cond ? 
 
 // ── conversion ───────────────────────────────────────────────────────────────
 const rows: AiLedgerRow[] = [
-  { date: '31 Mar 2024', voucherType: 'OPENING', voucherNo: '', reference: '', narration: 'Opening Balance', debit: 0, credit: 13821818.13 },
-  { date: '03 Apr 2024', voucherType: 'PAYMENT', voucherNo: '57', reference: '', narration: 'Deutsche Bank Ch.No. 505217 payment paid to RDC', debit: 19809.26, credit: 0 },
-  { date: '05 Apr 2024', voucherType: 'INVOICE', voucherNo: 'P/1', reference: '1CH24ARS123', narration: 'Bill booked 1CH24ARS123', debit: 0, credit: 50000 },
+  { date: '31 Mar 2024', voucherType: 'OPENING', voucherNo: '', reference: '', narration: 'Opening Balance', debit: 0, credit: 13821818.13, runningBalance: '' },
+  { date: '03 Apr 2024', voucherType: 'PAYMENT', voucherNo: '57', reference: '', narration: 'Deutsche Bank Ch.No. 505217 payment paid to RDC', debit: 19809.26, credit: 0, runningBalance: '' },
+  { date: '05 Apr 2024', voucherType: 'INVOICE', voucherNo: 'P/1', reference: '1CH24ARS123', narration: 'Bill booked 1CH24ARS123', debit: 0, credit: 50000, runningBalance: '' },
   // duplicate of the invoice (chunk-boundary echo) must be dropped
-  { date: '05 Apr 2024', voucherType: 'INVOICE', voucherNo: 'P/1', reference: '1CH24ARS123', narration: 'Bill booked 1CH24ARS123', debit: 0, credit: 50000 },
-  { date: '31 Mar 2025', voucherType: 'CLOSING', voucherNo: '', reference: '', narration: 'Closing Balance', debit: 0, credit: 13852008.87 },
+  { date: '05 Apr 2024', voucherType: 'INVOICE', voucherNo: 'P/1', reference: '1CH24ARS123', narration: 'Bill booked 1CH24ARS123', debit: 0, credit: 50000, runningBalance: '' },
+  { date: '31 Mar 2025', voucherType: 'CLOSING', voucherNo: '', reference: '', narration: 'Closing Balance', debit: 0, credit: 13852008.87, runningBalance: '' },
 ];
 const res = aiRowsToParseResult(rows, 'test.pdf', 'CUSTOMER');
 ck('conversion: 2 transactions (duplicate dropped, balances excluded)', res.transactions.length === 2, String(res.transactions.length));

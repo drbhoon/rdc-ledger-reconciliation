@@ -42,6 +42,7 @@ export async function writeReport(result: ReconcileResult, filePath: string) {
   // Same reference, wildly different amounts — usually a mis-read figure.
   // Given its own sheet so it cannot hide among hundreds of matched rows.
   addSheet(wb, 'Large_Variance_Check', (result.largeVarianceMatches || []).map(rowFromMatch));
+  addParseAudit(wb, result);
   addDuplicates(wb, result);
   addSheet(wb, 'Opening_Closing', result.openingClosing.map(rowFromMatch));
   addSheet(wb, 'AI_Review_Log', [
@@ -95,6 +96,36 @@ function addDuplicates(wb: ExcelJS.Workbook, result: ReconcileResult) {
   ws.views = [{ state: 'frozen', ySplit: 1 }];
   if (ws.rowCount > 1) ws.autoFilter = { from: 'A1', to: 'H1' };
 }
+/**
+ * Parse self-audit: every row proved against the ledger's own running balance
+ * and printed totals. This is the sheet to read first — if a figure was
+ * mis-read anywhere, it is listed here with the row it came from.
+ */
+function addParseAudit(wb: ExcelJS.Workbook, result: ReconcileResult) {
+  const ws = wb.addWorksheet('Parse_Audit');
+  ws.columns = [
+    { key: 'ledger', header: 'Ledger', width: 12 },
+    { key: 'sourceRow', header: 'Source Row', width: 14 },
+    { key: 'date', header: 'Date', width: 14 },
+    { key: 'reference', header: 'Reference', width: 24 },
+    { key: 'parsedAmount', header: 'Amount Read', width: 18 },
+    { key: 'expectedAmount', header: 'Amount The Ledger Implies', width: 24 },
+    { key: 'delta', header: 'Difference', width: 16 },
+    { key: 'message', header: 'What Is Wrong', width: 80 },
+  ];
+  ws.getRow(1).font = { bold: true };
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF00' } };
+  for (const [label, audit] of [['RDC', result.rdc.audit], ['Customer', result.customer.audit]] as const) {
+    if (!audit) continue;
+    ws.addRow({ ledger: label, message: `VERDICT: ${audit.verdict} — checks run: ${audit.checks.join(' | ') || 'none available in this file'}` }).font = { bold: true };
+    if (audit.printedDebitTotal != null) {
+      ws.addRow({ ledger: label, message: `Printed totals Dr ${audit.printedDebitTotal.toFixed(2)} / Cr ${(audit.printedCreditTotal ?? 0).toFixed(2)}; parsed Dr ${(audit.parsedDebitTotal ?? 0).toFixed(2)} / Cr ${(audit.parsedCreditTotal ?? 0).toFixed(2)}` });
+    }
+    for (const i of audit.issues) ws.addRow({ ledger: label, ...i });
+    if (!audit.issues.length) ws.addRow({ ledger: label, message: audit.verdict === 'NOT_VERIFIABLE' ? 'This file prints no running balance or totals, so the parse could not be independently verified.' : 'Every row agrees with the ledger’s own arithmetic.' });
+  }
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+}
 function addCertificate(wb: ExcelJS.Workbook, result: ReconcileResult) {
   const c = result.cards;
   const certified = c.certified === true;
@@ -116,6 +147,16 @@ function addCertificate(wb: ExcelJS.Workbook, result: ReconcileResult) {
   check('RDC ledger ties to its stated closing balance', Math.abs(Number(c.rdcLedgerIntegrityGap) || 0) <= tol, `integrity gap ₹ ${Number(c.rdcLedgerIntegrityGap).toLocaleString('en-IN')}`);
   check('Customer ledger ties to its stated closing balance', Math.abs(Number(c.customerLedgerIntegrityGap) || 0) <= tol, `integrity gap ₹ ${Number(c.customerLedgerIntegrityGap).toLocaleString('en-IN')}`);
   check('Reconciliation fully explains the balance difference', Math.abs(Number(c.unexplainedDifference) || 0) <= tol, `unexplained ₹ ${Number(c.unexplainedDifference).toLocaleString('en-IN')}`);
+  // Row-level proof: every amount checked against the ledger's own running
+  // balance and printed totals (see the Parse_Audit sheet).
+  for (const [label, audit] of [['RDC', result.rdc.audit], ['Customer', result.customer.audit]] as const) {
+    if (!audit) continue;
+    check(`${label} ledger rows agree with its own running balance / printed totals`,
+      audit.verdict !== 'FAIL',
+      audit.verdict === 'NOT_VERIFIABLE'
+        ? 'file prints no balance or totals — not independently verifiable'
+        : audit.issues.length ? `${audit.issues.length} row(s) failed — see Parse_Audit` : `${audit.rowsChecked} rows verified`);
+  }
   ws.addRow([]);
   ws.addRow(['Matched value coverage', `${Number(c.matchedCoveragePct)}% of RDC ledger value`]);
   ws.addRow(['Matched entries', Number(c.matchedCount)]);

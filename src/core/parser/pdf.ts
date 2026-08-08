@@ -260,6 +260,7 @@ function parseSapStatementPdf(lines: string[], sourceFile: string, sourceSide: P
       amountOriginalSign: debit ? 'Dr' : 'Cr',
       parseConfidence: docNo ? 88 : 78,
       parserNotes: ['SAP statement-of-account PDF adapter'],
+      runningBalance: signedBalance(parseAmount(anchor[1]), anchor[2]),
     });
   }
   if (transactions.length) {

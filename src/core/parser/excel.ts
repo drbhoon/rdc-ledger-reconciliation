@@ -1,11 +1,11 @@
 import * as XLSX from 'xlsx';
 import fs from 'fs';
 import { v4 as uuid } from 'uuid';
-import { absAmount, signedFromDebitCredit } from '../amount';
+import { absAmount, parseAmount, signedFromDebitCredit } from '../amount';
 import { parseDate } from '../date';
 import { extractChequeNo, extractReferences, hasTruncatedReference, normalizeReference } from '../reference';
 import { parseGenericWorkbook } from './genericSheet';
-import type { NormalizedTxn, ParseResult, ParserLogRow, VoucherType } from '../types';
+import type { NormalizedTxn, ParseResult, ParserLogRow, PrintedTotals, VoucherType } from '../types';
 
 type Row = Record<string, unknown> & { __rowNum__: number };
 function headerRowIndex(ws: XLSX.WorkSheet) {
@@ -137,6 +137,7 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
   const transactions: NormalizedTxn[] = [];
   const parserLog: ParserLogRow[] = [];
   const balances: ParseResult['balances'] = { openingRows: [], closingRows: [] };
+  const printedTotals: PrintedTotals = {};
   const sourceFile = filePath.split(/[\\/]/).pop() || filePath;
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];
@@ -153,17 +154,17 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
     const headerText = Object.keys(rows[0] || {}).join('|').toLowerCase();
     const creditorLedger = /creditor|vendor name|vendor site/.test(sheetName.toLowerCase() + '|' + headerText);
     parserLog.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: 'Detected ' + kind + ' ledger layout' + (kind === 'RDC' && side === 'CUSTOMER' ? ' (customer vendor-ledger mirror: bills=Cr, payments=Dr)' : '') + (creditorLedger && side === 'RDC' ? ' (RDC creditor/payable ledger: bills=Cr, payments=Dr)' : ''), confidence: 90 });
-    if (kind === 'RDC') parseRdcRows(rows, sourceFile, sheetName, transactions, balances, parserLog, side, creditorLedger && side === 'RDC');
+    if (kind === 'RDC') parseRdcRows(rows, sourceFile, sheetName, transactions, balances, parserLog, side, creditorLedger && side === 'RDC', printedTotals);
     else parseCustomerRows(rows, sourceFile, sheetName, transactions, balances, parserLog);
   }
   // Deterministic safety net: none of the known layouts read a single row —
   // hunt for a ledger table generically before anyone reaches for the AI.
   if (!transactions.length) {
-    parseGenericWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog);
+    parseGenericWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog, printedTotals);
   }
-  return { transactions, balances, parserLog };
+  return { transactions, balances, parserLog, printedTotals: (printedTotals.debit || printedTotals.credit) ? printedTotals : undefined };
 }
-function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[], side: 'RDC' | 'CUSTOMER' = 'RDC', creditorLedger = false) {
+function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[], side: 'RDC' | 'CUSTOMER' = 'RDC', creditorLedger = false, totals?: PrintedTotals) {
   for (const row of rows) {
     const docType = String(pick(row, ['Doc Type','Voucher Type']) ?? '');
     const voucherNo = String(pick(row, ['Inv / Receipt Number','Voucher No']) ?? '');
@@ -193,7 +194,10 @@ function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out:
     // row double-counts the entire ledger.
     const allCells = Object.values(row).map(v => String(v ?? '')).join(' ');
     if (/grand total|total of debits|period total|\btotal\b/i.test(allCells) && (debit || credit) && !date) {
-      log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: 'Skipped total row' });
+      // Capture, don't just discard: the printed Dr/Cr totals prove the parse
+      // read every amount, which a net closing balance alone cannot.
+      if (totals && !totals.debit && !totals.credit) { totals.debit = debit; totals.credit = credit; totals.sheet = sourceSheet; }
+      log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: `Skipped total row (printed totals captured for the parse audit: Dr ${debit.toFixed(2)} / Cr ${credit.toFixed(2)})` });
       continue;
     }
     // UNLABELLED totals row: amounts but no date, no document number and no
@@ -201,10 +205,11 @@ function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out:
     // closing balance). Counting it doubles the whole ledger — Dalmia Chennai
     // was off by exactly its ₹69.9 lakh total.
     if ((debit || credit) && !date && !referenceNo && !docType && !particulars.trim()) {
-      log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: 'Skipped unlabelled total row (amounts with no date, document number or description)' });
+      if (totals && !totals.debit && !totals.credit) { totals.debit = debit; totals.credit = credit; totals.sheet = sourceSheet; }
+      log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: `Skipped unlabelled total row (printed totals captured: Dr ${debit.toFixed(2)} / Cr ${credit.toFixed(2)})` });
       continue;
     }
-    const txn = buildTxn({ sourceSide: side, sourceFile, sourceSheet, sourceRow: row.__rowNum__, date, voucherType, voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo || refs[0]), extractedReferences: refs, chequeNo: extractChequeNo([particulars, voucherNo, referenceNo]), particulars: [voucherNo, particulars].filter(Boolean).join(' | '), narration: [voucherNo, particulars].filter(Boolean).join(' | '), debit, credit, signedAmountRdcView: signedFromDebitCredit(side, debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: hasTruncatedReference([particulars, referenceNo]) ? 60 : 90, parserNotes: [] });
+    const txn = buildTxn({ sourceSide: side, sourceFile, sourceSheet, sourceRow: row.__rowNum__, date, voucherType, voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo || refs[0]), extractedReferences: refs, chequeNo: extractChequeNo([particulars, voucherNo, referenceNo]), particulars: [voucherNo, particulars].filter(Boolean).join(' | '), narration: [voucherNo, particulars].filter(Boolean).join(' | '), debit, credit, signedAmountRdcView: signedFromDebitCredit(side, debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: hasTruncatedReference([particulars, referenceNo]) ? 60 : 90, parserNotes: [], runningBalance: (() => { const cb = pick(row, ['CB','Running Bal','Closing Bal','Balance']); const s = cb instanceof Date ? '' : String(cb ?? '').trim(); return s ? parseAmount(s) : undefined; })() });
     if (voucherType === 'OPENING') { balances.opening = txn.signedAmountRdcView; balances.openingRows?.push(txn); continue; }
     if (voucherType === 'CLOSING') { balances.closing = txn.signedAmountRdcView; balances.closingRows?.push(txn); continue; }
     out.push(txn);

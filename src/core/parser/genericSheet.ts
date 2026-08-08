@@ -3,7 +3,7 @@ import { v4 as uuid } from 'uuid';
 import { parseAmount, signedFromDebitCredit } from '../amount';
 import { parseDate } from '../date';
 import { extractChequeNo, extractReferences, normalizeReference } from '../reference';
-import type { NormalizedTxn, ParseResult, ParserLogRow, VoucherType } from '../types';
+import type { NormalizedTxn, ParseResult, ParserLogRow, PrintedTotals, VoucherType } from '../types';
 
 /**
  * Generic spreadsheet adapter — the deterministic safety net that fires when
@@ -98,7 +98,7 @@ function classifyGeneric(side: 'RDC' | 'CUSTOMER', docType: string, text: string
   return 'OTHER';
 }
 
-export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side: 'RDC' | 'CUSTOMER', out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[]) {
+export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side: 'RDC' | 'CUSTOMER', out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[], totals?: PrintedTotals) {
   const seen = new Set<string>();
   // receivable-view sign of a displayed balance: a customer/vendor statement
   // shows its OWN view, which is the mirror of RDC's receivable view.
@@ -176,7 +176,11 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
         balances.closing = columnar ? gross : (balCell ? balSign * parseAmount(balCell) : signedFromDebitCredit(side, debit, credit));
         continue;
       }
-      if (/grand total|total of|period total|\btotal\b/i.test(allText) && !date) continue;
+      if (/grand total|total of|period total|\btotal\b/i.test(allText) && !date) {
+        // Printed Dr/Cr totals are evidence for the parse audit.
+        if (totals && !totals.debit && !totals.credit && !columnar && (debit || credit)) { totals.debit = debit; totals.credit = credit; totals.sheet = sheetName; }
+        continue;
+      }
       if (!debit && !credit) continue;
       // A columnar register's column total includes every money row, even one
       // with no date (Suroj had a stray −₹37). Dropping it would leave an
@@ -207,6 +211,7 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
         amountOriginalSign: debit ? 'Dr' : 'Cr',
         parseConfidence: referenceNo ? 85 : 78,
         parserNotes: ['Generic layout adapter', ...(date ? [] : ['Source row has no date'])],
+        runningBalance: cell(row, 'balance') ? balSign * parseAmount(cell(row, 'balance')) : undefined,
       });
       const balCell = cell(row, 'balance');
       if (balCell && date && (!latestBalance || date >= latestBalance.date)) {

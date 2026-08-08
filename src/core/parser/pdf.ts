@@ -88,6 +88,24 @@ export async function parsePdfFile(filePath: string, sourceSide: PdfSide = 'CUST
     statement.parserLog.unshift(...parserLog);
     return statement;
   }
+  // Tally "Ledger Account" print — must run before the vertical Tally parser,
+  // which reads its amounts but none of its bill references.
+  // Accepted ONLY when its rows reproduce the Dr/Cr totals the statement
+  // prints for itself. Several Tally prints share this header while laying the
+  // body out differently, and a plausible-looking wrong parse is the worst
+  // outcome — so the adapter has to prove itself before it is used.
+  const ledgerAccount = parseTallyLedgerAccountPdf(spacedLines.length ? spacedLines : lines, sourceFile, sourceSide);
+  if (ledgerAccount.transactions.length && ledgerAccount.printedTotals) {
+    const debitSum = ledgerAccount.transactions.reduce((s, t) => s + Math.abs(t.debit || 0), 0);
+    const creditSum = ledgerAccount.transactions.reduce((s, t) => s + Math.abs(t.credit || 0), 0);
+    const tiesToPrintedTotals = Math.abs(debitSum - (ledgerAccount.printedTotals.debit ?? NaN)) <= 1
+      && Math.abs(creditSum - (ledgerAccount.printedTotals.credit ?? NaN)) <= 1;
+    if (tiesToPrintedTotals) {
+      ledgerAccount.parserLog.unshift(...parserLog);
+      return ledgerAccount;
+    }
+    parserLog.push({ sourceFile, level: 'info', message: `Tally Ledger Account adapter rejected: its ${ledgerAccount.transactions.length} rows do not reproduce the printed totals (Dr ${debitSum.toFixed(2)} vs ${(ledgerAccount.printedTotals.debit ?? 0).toFixed(2)}); trying the other layouts`, confidence: 60 });
+  }
   const compact = parseCompactPdfLedger(spacedLines.length ? spacedLines : lines, sourceFile, sourceSide);
   if (compact.transactions.length || compact.balances.opening || compact.balances.closing) {
     compact.parserLog.unshift(...parserLog);
@@ -267,6 +285,119 @@ function parseSapStatementPdf(lines: string[], sourceFile: string, sourceSide: P
     parserLog.push({ sourceFile, level: 'info', message: `Parsed ${transactions.length} rows using the SAP statement-of-account PDF adapter (running-balance anchored)`, confidence: 88 });
   }
   return { transactions, balances, parserLog };
+}
+
+/**
+ * Tally "Ledger Account" PDF (columnar print, one voucher per block):
+ *
+ *   30-Aug-25 Dr (as per details) Purchase 1 31,753.80
+ *     Piling 26,910.00 Dr
+ *     CGST Receivable 2,421.90 Dr
+ *     New Ref 4KL25BP1-1120 30 Days 31,753.80 Cr     <- the bill reference
+ *     Being RMC purchased for pilling activity
+ *
+ * The bill number lives on the New Ref / Agst Ref line BELOW the voucher, not
+ * on the voucher line. Reading only the voucher line yields correct amounts
+ * with no references at all — which is why 43 of Lotus Villa's 45 invoices
+ * could not be matched even though both ledgers carried the same bill numbers.
+ * A payment block carries many Agst Ref lines (one per bill it settles); they
+ * are all kept so the payment can be matched and traced.
+ */
+function parseTallyLedgerAccountPdf(lines: string[], sourceFile: string, sourceSide: PdfSide): ParseResult {
+  const transactions: NormalizedTxn[] = [];
+  const balances: ParseResult['balances'] = { openingRows: [], closingRows: [] };
+  const parserLog: ParseResult['parserLog'] = [];
+  const printedTotals: { debit?: number; credit?: number } = {};
+  const hasHeader = lines.some(l => /Date\s+Particulars\s+Vch\s*Type\s+Vch\s*No/i.test(l));
+  if (!hasHeader) return { transactions, balances, parserLog };
+
+  const VCH = '(?:Purchase|Payment|Receipt|Journal|Credit Note|Debit Note|Sales|Contra)';
+  const PARENT = new RegExp(`^(?:(\\d{1,2}-[A-Za-z]{3}-\\d{2,4})\\s+)?(.*?)\\s+(${VCH})\\s+(\\S+)\\s+(-?[\\d,]+\\.\\d{2})$`, 'i');
+  // "New Ref 4KL25BP1-1120 30 Days 31,753.80 Cr" — take the token right after
+  // the keyword as the bill number and the trailing Dr/Cr as the side. (Read
+  // separately: a single pattern spanning both trips over the "30 Days" term.)
+  const REF_LINE = /\b(?:New Ref|Agst Ref|On Acc)\b\s*(\S*)/i;
+  const TOTALS_LINE = /^(-?[\d,]+\.\d{2})\s+(-?[\d,]+\.\d{2})$/;
+  const SKIP = /carried over|brought forward|continued|page \d|ledger account|^date\s+particulars/i;
+
+  type Pending = { date?: string; particulars: string; vchType: string; vchNo: string; amount: number; refs: string[]; sign?: 'Dr' | 'Cr'; narration: string[]; row: number };
+  let pending: Pending | undefined;
+  let currentDate: string | undefined;
+
+  const flush = () => {
+    if (!pending) return;
+    const { date, particulars, vchType, vchNo, amount, refs, narration } = pending;
+    // Side comes from the allocation line's Dr/Cr when present, else from the
+    // voucher type (a purchase credits the supplier, a payment debits them).
+    const sign = pending.sign ?? (/payment|receipt|contra/i.test(vchType) ? 'Dr' : 'Cr');
+    const debit = sign === 'Dr' ? amount : 0;
+    const credit = sign === 'Cr' ? amount : 0;
+    if (amount > 0) {
+      const referenceNo = refs[0] || '';
+      transactions.push(makePdfTxn({
+        sourceSide, sourceFile, sourceRow: pending.row,
+        date, voucherType: tallyVoucherType(vchType, particulars, sign === 'Dr' ? 'DR' : 'CR', refs),
+        voucherNo: vchNo, referenceNo,
+        normalizedReferenceNo: normalizeReference(referenceNo),
+        extractedReferences: refs,
+        chequeNo: extractChequeNo([particulars, ...narration]),
+        particulars: [particulars, ...narration].filter(Boolean).join(' | ').slice(0, 200),
+        narration: [particulars, ...narration, ...refs].filter(Boolean).join(' | ').slice(0, 400),
+        debit, credit,
+        signedAmountRdcView: signedFromDebitCredit(sourceSide, debit, credit),
+        amountOriginalSign: sign,
+        parseConfidence: referenceNo ? 88 : 74,
+        parserNotes: ['Tally Ledger Account PDF adapter', ...(refs.length > 1 ? [`Settles ${refs.length} bills`] : [])],
+      }));
+    }
+    pending = undefined;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (SKIP.test(line)) continue;
+    const totals = line.match(TOTALS_LINE);
+    if (totals) {
+      // The closing Dr/Cr totals line — the evidence the parse audit needs.
+      flush();
+      printedTotals.debit = parseAmount(totals[1]);
+      printedTotals.credit = parseAmount(totals[2]);
+      continue;
+    }
+    const parent = line.match(PARENT);
+    if (parent) {
+      flush();
+      if (parent[1]) currentDate = parseDate(parent[1]);
+      pending = { date: currentDate, particulars: (parent[2] || '').trim(), vchType: parent[3], vchNo: parent[4], amount: Math.abs(parseAmount(parent[5])), refs: [], narration: [], row: i + 1 };
+      continue;
+    }
+    if (!pending) continue;
+    const ref = line.match(REF_LINE);
+    if (ref) {
+      const token = (ref[1] || '').trim();
+      if (token && !/^\d+$/.test(token) && !/^-?[\d,]+\.\d{2}$/.test(token)) pending.refs.push(token);
+      const side = line.match(/\b(Dr|Cr)\b\s*$/i);
+      if (side && !pending.sign) pending.sign = /dr/i.test(side[1]) ? 'Dr' : 'Cr';
+      continue;
+    }
+    if (/^being\b/i.test(line) || pending.narration.length) {
+      if (pending.narration.length < 3) pending.narration.push(line.slice(0, 80));
+    }
+  }
+  flush();
+
+  if (transactions.length) {
+    // No opening row printed and the account starts at zero, so the closing
+    // balance is simply what the transactions add up to — which the printed
+    // Dr/Cr totals then verify independently.
+    balances.opening = 0;
+    balances.closing = transactions.reduce((s, t) => s + t.signedAmountRdcView, 0);
+    parserLog.push({ sourceFile, level: 'info', message: `Parsed ${transactions.length} rows using the Tally Ledger Account PDF adapter (bill references read from New Ref / Agst Ref lines)`, confidence: 88 });
+    if (printedTotals.debit || printedTotals.credit) {
+      parserLog.push({ sourceFile, level: 'info', message: `Printed totals captured for the parse audit: Dr ${(printedTotals.debit ?? 0).toFixed(2)} / Cr ${(printedTotals.credit ?? 0).toFixed(2)}`, confidence: 90 });
+    }
+  }
+  return { transactions, balances, parserLog, printedTotals: (printedTotals.debit || printedTotals.credit) ? printedTotals : undefined };
 }
 
 function parseCompactPdfLedger(lines: string[], sourceFile: string, sourceSide: PdfSide): ParseResult {

@@ -166,7 +166,6 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     let best: { txn: NormalizedTxn; confidence: number; reason?: string } | undefined;
     let refBest: { txn: NormalizedTxn; confidence: number; reason?: string; familyPenalty: number; amountGap: number } | undefined;
     let colBest: { txn: NormalizedTxn; confidence: number; reason?: string; days: number } | undefined;
-    let simBest: { txn: NormalizedTxn; confidence: number; reason?: string; days: number } | undefined;
     for (const c of candidates) {
       if (usedCust.has(c.id) || !types.includes(c.voucherType)) continue;
       const cref = refKey(c);
@@ -207,12 +206,9 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
       // amount and date agree — that is a match, not a review item
       // (accounts-team feedback, Dalmia 2026-07: "invoice number entered
       // differently by each party though amount and date match").
-      if (amountOk && dateOk && refSimilar(rref, cref)) {
-        if (!simBest || days < simBest.days) simBest = { txn: c, confidence: 80, reason: `Amount and date match; reference nearly matches (${cref} vs ${rref}) — likely data-entry slip`, days };
-      }
       if (amountOk && dateOk && !best) best = { txn: c, confidence: 72, reason: 'Amount and date near; review required' };
     }
-    return refBest || colBest || simBest || best;
+    return refBest || colBest || best;
   };
   for (const r of rdcInPeriod) {
     // Credit notes are often booked by customers as (negative) purchases or
@@ -305,6 +301,43 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
         ? `Customer payment voucher ${voucher} (${group.length} invoice allocations totalling ${total.toFixed(2)}) matched to RDC receipt ${receipt.voucherNo || ''}`
         : `Customer payment ${voucher} matched to RDC receipt ${receipt.voucherNo || ''} by amount`,
     }));
+  }
+
+  // ── Near-reference second pass ──────────────────────────────────────────
+  // Runs only after every exact, truncated and grouped match is settled, so a
+  // row that has a proper partner can never be stolen by a look-alike number.
+  // What is left over are bills each side numbered differently: same amount,
+  // near-identical reference, booked within a couple of months. Lotus Villa
+  // booked two bills twice under the same numbers, leaving RDC's ...-1424 and
+  // ...-1449 with no exact counterpart at all.
+  {
+    const matchable = [...invoiceTypes, ...creditTypes];
+    const leftoverCustomer = customerInPeriod.filter(t => !usedCust.has(t.id) && matchable.includes(t.voucherType));
+    for (const r of rdcInPeriod) {
+      if (usedRdc.has(r.id) || !matchable.includes(r.voucherType)) continue;
+      const rref = refKey(r);
+      if (!rref) continue;
+      let pick: { txn: NormalizedTxn; days: number; cref: string } | undefined;
+      for (const c of leftoverCustomer) {
+        if (usedCust.has(c.id)) continue;
+        const cref = refKey(c);
+        if (!refSimilar(rref, cref)) continue;
+        if (!within(absSigned(r), absSigned(c), options.invoiceTolerance)) continue;
+        const days = daysBetween(r.date, c.date);
+        if (days > 60) continue;
+        if (!pick || days < pick.days) pick = { txn: c, days, cref };
+      }
+      if (!pick) continue;
+      usedRdc.add(r.id); usedCust.add(pick.txn.id);
+      matches.push(matchRow({
+        matchStatus: 'MATCHED', reasonCode: 'REFERENCE_MISMATCH',
+        rdcTxn: r, customerTxn: pick.txn,
+        rdcAmount: r.signedAmountRdcView, customerAmount: pick.txn.signedAmountRdcView,
+        difference: r.signedAmountRdcView - pick.txn.signedAmountRdcView,
+        confidence: 80,
+        remarks: `Amount and date match; reference nearly matches (${pick.cref} vs ${rref}) — likely data-entry slip in the bill number; no exact counterpart exists on either side`,
+      }));
+    }
   }
 
   // ── Large-variance guard on reference-matched pairs ─────────────────────

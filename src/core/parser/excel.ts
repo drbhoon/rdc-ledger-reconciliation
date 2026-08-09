@@ -39,6 +39,19 @@ function pickText(row: Row, names: string[]): string {
   }
   return '';
 }
+/**
+ * Does this sheet actually look like an RDC ledger export? A reconciliation
+ * WORKBOOK carries the ledger alongside working sheets (the customer's ledger,
+ * a Reco sheet, annexures). Forcing the RDC reader onto every sheet merged them
+ * all into one ledger — Mosh's 1,348-row ledger came out as 2,612 rows, which
+ * is what produced 879 "unbooked" invoices worth ₹2.23 crore.
+ */
+function looksLikeRdcSheet(rows: Row[]) {
+  const header = Object.keys(rows[0] || {}).map(normHeader).join(' | ');
+  const hasAmounts = /tran dr amt|tran cr amt|\bdebit\b|\bcredit\b|\bdr\b|\bcr\b/.test(header);
+  const hasRdcColumns = /inv receipt|invoice number|doc type|gst inv|vendor name|vendor site|plant name/.test(header);
+  return hasAmounts && hasRdcColumns;
+}
 function detect(rows: Row[]) {
   const headers = Object.keys(rows[0] || {}).join('|').toLowerCase();
   if (headers.includes('tran dr') || headers.includes('gst inv')) return 'RDC';
@@ -152,7 +165,21 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
   if (parseInvoiceRegisterWorkbook(wb, sourceFile, hintedSide, transactions, balances, parserLog) && transactions.length) {
     return { transactions, balances, parserLog };
   }
+  // When at least one sheet is a genuine RDC ledger, the others are working
+  // papers and must not be folded into it.
+  const rdcSheets = new Set<string>();
+  if (sourceSideHint === 'RDC') {
+    for (const sheetName of wb.SheetNames) {
+      const probe = XLSX.utils.sheet_to_json<Row>(wb.Sheets[sheetName], { defval: '', raw: true, range: headerRowIndex(wb.Sheets[sheetName]) });
+      if (probe.length && looksLikeRdcSheet(probe)) rdcSheets.add(sheetName);
+    }
+  }
+  const seenAcrossSheets = new Map<string, string>();
   for (const sheetName of wb.SheetNames) {
+    if (rdcSheets.size && !rdcSheets.has(sheetName)) {
+      parserLog.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: 'Skipped: this sheet is not an RDC ledger export (working paper, annexure or the other party\'s ledger)', confidence: 85 });
+      continue;
+    }
     const ws = wb.Sheets[sheetName];
     // raw:true is REQUIRED for accuracy: raw:false returns Excel's *displayed*
     // text, so a cell formatted without decimals ("29,250" for 29250.20) loses
@@ -167,7 +194,7 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
     const headerText = Object.keys(rows[0] || {}).join('|').toLowerCase();
     const creditorLedger = /creditor|vendor name|vendor site/.test(sheetName.toLowerCase() + '|' + headerText);
     parserLog.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: 'Detected ' + kind + ' ledger layout' + (kind === 'RDC' && side === 'CUSTOMER' ? ' (customer vendor-ledger mirror: bills=Cr, payments=Dr)' : '') + (creditorLedger && side === 'RDC' ? ' (RDC creditor/payable ledger: bills=Cr, payments=Dr)' : ''), confidence: 90 });
-    if (kind === 'RDC') parseRdcRows(rows, sourceFile, sheetName, transactions, balances, parserLog, side, creditorLedger && side === 'RDC', printedTotals);
+    if (kind === 'RDC') parseRdcRows(rows, sourceFile, sheetName, transactions, balances, parserLog, side, creditorLedger && side === 'RDC', printedTotals, seenAcrossSheets);
     else parseCustomerRows(rows, sourceFile, sheetName, transactions, balances, parserLog);
   }
   // Deterministic safety net: none of the known layouts read a single row —
@@ -177,7 +204,7 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
   }
   return { transactions, balances, parserLog, printedTotals: (printedTotals.debit || printedTotals.credit) ? printedTotals : undefined };
 }
-function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[], side: 'RDC' | 'CUSTOMER' = 'RDC', creditorLedger = false, totals?: PrintedTotals) {
+function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[], side: 'RDC' | 'CUSTOMER' = 'RDC', creditorLedger = false, totals?: PrintedTotals, seenAcrossSheets?: Map<string, string>) {
   for (const row of rows) {
     const docType = String(pick(row, ['Doc Type','Voucher Type']) ?? '');
     const voucherNo = String(pick(row, ['Inv / Receipt Number','Voucher No']) ?? '');
@@ -225,6 +252,15 @@ function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out:
     const txn = buildTxn({ sourceSide: side, sourceFile, sourceSheet, sourceRow: row.__rowNum__, date, voucherType, voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo || refs[0]), extractedReferences: refs, chequeNo: extractChequeNo([particulars, voucherNo, referenceNo]), particulars: [voucherNo, particulars].filter(Boolean).join(' | '), narration: [voucherNo, particulars].filter(Boolean).join(' | '), debit, credit, signedAmountRdcView: signedFromDebitCredit(side, debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: hasTruncatedReference([particulars, referenceNo]) ? 60 : 90, parserNotes: [], runningBalance: (() => { const cb = pick(row, ['CB','Running Bal','Closing Bal','Balance']); const s = cb instanceof Date ? '' : String(cb ?? '').trim(); return s ? parseAmount(s) : undefined; })() });
     if (voucherType === 'OPENING') { balances.opening = txn.signedAmountRdcView; balances.openingRows?.push(txn); continue; }
     if (voucherType === 'CLOSING') { balances.closing = txn.signedAmountRdcView; balances.closingRows?.push(txn); continue; }
+    // An annexure repeats rows that already appear in the ledger sheet. Drop a
+    // row only when the identical entry was read from a DIFFERENT sheet —
+    // genuine repeats inside one sheet are kept.
+    if (seenAcrossSheets) {
+      const key = [date, txn.voucherNo, referenceNo, debit, credit].join('|');
+      const firstSheet = seenAcrossSheets.get(key);
+      if (firstSheet && firstSheet !== sourceSheet) continue;
+      if (!firstSheet) seenAcrossSheets.set(key, sourceSheet);
+    }
     out.push(txn);
   }
 }

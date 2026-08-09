@@ -94,12 +94,27 @@ function classifyGeneric(side: 'RDC' | 'CUSTOMER', docType: string, text: string
   if (/debit note|debit memo|tcs/.test(t)) return 'DEBIT_NOTE';
   if (/round\s*off/.test(t)) return 'OTHER';
   if (/journal|\bjv\b/.test(t)) return 'JOURNAL_ADJUSTMENT';
-  if (/purchase|material|inv|sale|bill/.test(t)) return 'INVOICE';
+  if (/purchase|material|\bpur\b|inv|sale|bill/.test(t)) return 'INVOICE';
+  // Last resort, counterparty side only: in the customer's books of RDC a
+  // credit is a bill and a debit is money paid. A ledger row with an amount is
+  // a real transaction, and dumping it into "Other entries" tells the accounts
+  // team nothing (Mosh: 834 rows worth ₹69 lakh landed there). RDC's own
+  // exports are left alone — a debit there can be either, depending on whether
+  // the file is a debtors or a creditors ledger.
+  if (side === 'CUSTOMER') {
+    if (credit > 0) return 'INVOICE';
+    if (debit > 0) return cash;
+  }
   return 'OTHER';
 }
 
 export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side: 'RDC' | 'CUSTOMER', out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[], totals?: PrintedTotals) {
-  const seen = new Set<string>();
+  // Key -> the sheet it was first seen on. De-duplication is for workbooks that
+  // repeat the same ledger across sheets; a row repeated WITHIN one sheet is a
+  // real double posting and must survive — that is exactly the reconciling item
+  // the accounts team is looking for (Mosh: invoice 1RA23ARS998 booked twice,
+  // ₹22,148, which was being silently removed).
+  const seen = new Map<string, string>();
   // receivable-view sign of a displayed balance: a customer/vendor statement
   // shows its OWN view, which is the mirror of RDC's receivable view.
   const balSign = side === 'CUSTOMER' ? -1 : 1;
@@ -192,8 +207,9 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
       const reference = cell(row, 'reference');
       const voucherNo = cell(row, 'docNo') || reference;
       const key = [date, voucherNo, reference, debit, credit].join('|');
-      if (seen.has(key)) { duplicates += 1; continue; }
-      seen.add(key);
+      const firstSheet = seen.get(key);
+      if (firstSheet && firstSheet !== sheetName) { duplicates += 1; continue; }
+      if (!firstSheet) seen.set(key, sheetName);
       const voucherType = classifyGeneric(side, docType, narration + ' ' + reference, debit, credit);
       const refs = extractReferences([reference, narration]);
       const referenceNo = reference || refs[0] || '';

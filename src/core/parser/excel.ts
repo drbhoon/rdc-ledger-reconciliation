@@ -6,6 +6,7 @@ import { parseDate } from '../date';
 import { extractChequeNo, extractReferences, hasTruncatedReference, normalizeReference } from '../reference';
 import { parseGenericWorkbook } from './genericSheet';
 import { parseSplitVoucherWorkbook } from './splitVoucherSheet';
+import { parseInvoiceRegisterWorkbook } from './invoiceRegisterSheet';
 import type { NormalizedTxn, ParseResult, ParserLogRow, PrintedTotals, VoucherType } from '../types';
 
 type Row = Record<string, unknown> & { __rowNum__: number };
@@ -142,8 +143,14 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
   const sourceFile = filePath.split(/[\\/]/).pop() || filePath;
   // ERP exports that split one voucher across several account rows must be
   // regrouped before anything else reads them row by row.
-  if (parseSplitVoucherWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog, printedTotals) && transactions.length) {
+  const hintedSide = sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER';
+  if (parseSplitVoucherWorkbook(wb, sourceFile, hintedSide, transactions, balances, parserLog, printedTotals) && transactions.length) {
     return { transactions, balances, parserLog, printedTotals: (printedTotals.debit || printedTotals.credit) ? printedTotals : undefined };
+  }
+  // Customer-maintained invoice registers: one row can hold an invoice AND a
+  // payment, so they must be split before any row-per-entry reader sees them.
+  if (parseInvoiceRegisterWorkbook(wb, sourceFile, hintedSide, transactions, balances, parserLog) && transactions.length) {
+    return { transactions, balances, parserLog };
   }
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];

@@ -636,8 +636,24 @@ function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: Match
       contribution: rdcMinusCust,
     });
   };
+  // Opening balance vs the RDC activity that predates the customer's ledger:
+  // when the customer starts later with a brought-forward figure, these two are
+  // the same thing seen from both sides and very nearly cancel. Reporting them
+  // as two large opposing lines (AFA: +2,28,000 and −2,28,000.06) reads as a
+  // problem when the real difference is six paise — so they are netted.
+  const preLedgerRows = exceptions.filter(e => e.reasonCode === 'RDC_BEFORE_CUSTOMER_LEDGER_START');
+  const preLedgerAmount = preLedgerRows.reduce((s, e) => s + e.difference, 0);
   const openingDiff = (rdc.balances.opening ?? 0) - (customer.balances.opening ?? 0);
-  if (Math.abs(openingDiff) > 1 && (rdc.balances.opening != null || customer.balances.opening != null)) {
+  const hasOpeningDiff = Math.abs(openingDiff) > 1 && (rdc.balances.opening != null || customer.balances.opening != null);
+  const mergedOpeningLine = hasOpeningDiff && preLedgerRows.length > 0;
+  if (mergedOpeningLine) {
+    pushLine(
+      "Opening balance difference, net of RDC entries before the customer's ledger starts",
+      openingDiff + preLedgerAmount,
+      `Customer opening ${Math.abs(customer.balances.opening ?? 0).toLocaleString('en-IN')} against ${preLedgerRows.length} earlier RDC entries totalling ${Math.abs(preLedgerAmount).toLocaleString('en-IN')}`,
+      'OPENING_BALANCE_MISMATCH',
+    );
+  } else if (hasOpeningDiff) {
     pushLine('Opening balance difference (Customer opening less RDC opening)', openingDiff, 'Customer opening minus RDC opening', 'OPENING_BALANCE_MISMATCH');
   }
   // Amount variances on reference-matched items (e.g. TDS/rounding/short booking).
@@ -657,7 +673,12 @@ function buildSummary(rdc: ParseResult, customer: ParseResult, exceptions: Match
     return `${reason}::${type ? familyOf(type) : 'OTHER'}`;
   };
   const grouped = new Map<string, MatchRow[]>();
-  for (const e of exceptions) { const k = groupKey(e); grouped.set(k, [...(grouped.get(k) || []), e]); }
+  for (const e of exceptions) {
+    // Already reported inside the netted opening-balance line above.
+    if (mergedOpeningLine && e.reasonCode === 'RDC_BEFORE_CUSTOMER_LEDGER_START') continue;
+    const k = groupKey(e);
+    grouped.set(k, [...(grouped.get(k) || []), e]);
+  }
   for (const [key, rows] of grouped) {
     const amount = rows.reduce((s,r)=>s+r.difference,0);
     if (Math.abs(amount) <= 1) continue;

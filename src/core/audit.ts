@@ -1,4 +1,4 @@
-import type { LedgerAudit, ParseResult, RowAuditIssue } from './types';
+import type { LedgerAudit, NormalizedTxn, ParseResult, RowAuditIssue } from './types';
 
 /**
  * Row-level parse audit — proves the parse against what the source document
@@ -25,29 +25,37 @@ export function auditLedger(parsed: ParseResult, side: 'RDC' | 'CUSTOMER', toler
   const aiExtractedRows = txns.filter(t => t.parserNotes?.some(n => /AI-extracted/i.test(n))).length;
 
   // ── 1. running-balance continuity ─────────────────────────────────────────
-  const withBalance = txns.filter(t => typeof t.runningBalance === 'number' && Number.isFinite(t.runningBalance));
+  const balancedRows = txns.filter(t => typeof t.runningBalance === 'number' && Number.isFinite(t.runningBalance));
   let rowsChecked = 0;
-  if (withBalance.length >= 3) {
-    checks.push(`Running balance continuity on ${withBalance.length} rows`);
-    // The row before the first balanced row is the opening figure.
+  if (balancedRows.length >= 3) {
+    checks.push(`Running balance continuity on ${balancedRows.length} rows`);
+    // Walk EVERY transaction in order, accumulating, and settle up whenever a
+    // printed balance appears. A source row can produce more than one entry (an
+    // invoice and a payment on the same line, or a voucher split across account
+    // heads) and the balance covers all of them.
     let previous = parsed.balances.opening;
-    for (let i = 0; i < withBalance.length; i++) {
-      const row = withBalance[i];
-      const balance = row.runningBalance as number;
+    let accumulated = 0;
+    const pending: NormalizedTxn[] = [];
+    for (const txn of txns) {
+      accumulated += txn.signedAmountRdcView;
+      pending.push(txn);
+      const balance = txn.runningBalance;
+      if (typeof balance !== 'number' || !Number.isFinite(balance)) continue;
       if (previous != null) {
         const expected = balance - previous;
-        const parsedAmount = row.signedAmountRdcView;
-        const delta = parsedAmount - expected;
+        const delta = accumulated - expected;
         rowsChecked += 1;
         if (Math.abs(delta) > tolerance) {
           issues.push({
-            sourceRow: row.sourceRow, date: row.date, reference: row.referenceNo,
-            parsedAmount, expectedAmount: expected, delta,
-            message: `Row amount ${parsedAmount.toFixed(2)} does not match the movement in the ledger's own running balance (${expected.toFixed(2)})`,
+            sourceRow: pending.map(p => p.sourceRow).join(','), date: txn.date, reference: txn.referenceNo,
+            parsedAmount: accumulated, expectedAmount: expected, delta,
+            message: `${pending.length > 1 ? `The ${pending.length} entries read from this row total` : 'Row amount'} ${accumulated.toFixed(2)}, but the ledger's own running balance moves by ${expected.toFixed(2)}`,
           });
         }
       }
       previous = balance;
+      accumulated = 0;
+      pending.length = 0;
     }
   }
 

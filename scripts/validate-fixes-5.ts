@@ -58,9 +58,12 @@ const ck = (label: string, cond: boolean, detail = '') => { console.log((cond ? 
   const receiptsToTake = r.unmatchedRdc.filter(m => m.rdcTxn?.voucherType === 'RECEIPT' && m.reasonCode !== 'RDC_BEFORE_CUSTOMER_LEDGER_START')
     .reduce((s, m) => s + (m.rdcAmount || 0), 0);
   ck("reconcile: unmatched RDC receipts = team's -33,69,981", Math.abs(receiptsToTake - -3369981) < 2, receiptsToTake.toFixed(0));
-  // pre-ledger bucket should absorb ~ the customer's brought-forward opening
-  const preLedger = r.summaryLines.find(l => /before customer ledger starts/i.test(l.particular));
-  ck('reconcile: pre-ledger RDC bucket ≈ customer opening 4,36,482', !!preLedger && Math.abs(preLedger.amount - 436482) < 2, String(preLedger?.amount));
+  // Round 14: the customer's brought-forward opening and RDC's earlier entries
+  // are netted into ONE line — they are the same thing from both sides, and
+  // here they cancel almost exactly.
+  const preLedger = r.summaryLines.find(l => /net of RDC entries before/i.test(l.particular));
+  ck('reconcile: opening vs pre-ledger RDC entries netted to ~0 on one line', !!preLedger && Math.abs(preLedger.amount) < 2, String(preLedger?.amount));
+  ck('reconcile: the pre-ledger rows are still listed for review', r.unmatchedRdc.some(m => m.reasonCode === 'RDC_BEFORE_CUSTOMER_LEDGER_START'));
   // no invoice may be consumed by a debit note quoting its number
   const crossFamily = r.matches.filter(m => m.rdcTxn?.voucherType === 'INVOICE' && m.customerTxn?.voucherType === 'DEBIT_NOTE' && Math.abs(m.difference || 0) > 10000);
   ck('reconcile: invoices not swallowed by debit notes on the same reference', crossFamily.length === 0, String(crossFamily.length));

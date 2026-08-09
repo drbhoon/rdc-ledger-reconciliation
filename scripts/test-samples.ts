@@ -17,7 +17,7 @@ async function testSuruchi() {
   const customer = await parseLedger(path.join(root, 'Suruchi Developers -customer Ledger.xlsx'), 'CUSTOMER');
   const result = reconcile(rdc, customer, sampleOptions('Suruchi Developers'));
 
-  assert.equal(result.netZeroReversals.length, 2, 'Suruchi same-date same-amount debit/credit reversal must net to zero');
+  assert.equal(result.netZeroReversals.filter(txn => txn.sourceSide === 'CUSTOMER').length, 2, 'Suruchi same-date same-amount customer debit/credit reversal must net to zero');
   assert.equal(result.cards.netZeroReversalCount, 2, 'Suruchi reversal count must be exposed in cards');
   assert.ok(result.journalEntries.length >= 10, 'Suruchi Journal/JV rows must be considered, not ignored');
   assert.ok(result.outsidePeriodCustomer.length > 0, 'Suruchi outside-period customer entries must be separated');

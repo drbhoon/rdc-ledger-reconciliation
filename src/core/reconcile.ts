@@ -31,7 +31,12 @@ export function applyCustomerNetZeroReversals(customer: ParseResult, tolerance =
   for (const txn of customer.transactions) {
     if (txn.sourceSide !== 'CUSTOMER') continue;
     const amount = Math.max(txn.debit, txn.credit);
-    if (!amount || !(paymentTypes.includes(txn.voucherType) || txn.voucherType === 'OTHER' || /bank|payment|reversal|journal/i.test(txn.particulars || ''))) continue;
+    // Do not net invoices/notes/tax merely because their particulars mention
+    // a journal. Tally parent/child allocations often contain equal opposite
+    // amounts and would otherwise make genuine invoices disappear.
+    const unclassifiedPayment = (txn.voucherType === 'OTHER' || txn.voucherType === 'JOURNAL_ADJUSTMENT')
+      && /bank|payment|receipt|reversal|bounce|cancel|cheque|chq|neft|rtgs/i.test(`${txn.particulars || ''} ${txn.narration || ''}`);
+    if (!amount || !(paymentTypes.includes(txn.voucherType) || unclassifiedPayment)) continue;
     const narrationKey = normalizeNarration(txn.narration || txn.particulars).replace(/\b(TO|BY)\b/g, '').trim();
     const referenceContext = txn.chequeNo || refKey(txn);
     const context = referenceContext

@@ -360,8 +360,13 @@ function parseTallyLedgerAccountPdf(lines: string[], sourceFile: string, sourceS
     if (totals) {
       // The closing Dr/Cr totals line — the evidence the parse audit needs.
       flush();
-      printedTotals.debit = parseAmount(totals[1]);
-      printedTotals.credit = parseAmount(totals[2]);
+      // Tally prints another equal-sided grand-total line after the closing
+      // balance. It includes that balance and is not the transaction total.
+      // The first pair, immediately before closing, is the auditable row total.
+      if (printedTotals.debit == null && printedTotals.credit == null) {
+        printedTotals.debit = parseAmount(totals[1]);
+        printedTotals.credit = parseAmount(totals[2]);
+      }
       continue;
     }
     const parent = line.match(PARENT);

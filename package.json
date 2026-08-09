@@ -5,7 +5,10 @@
     "start": "next start",
     "start:railway": "next start -p ${PORT:-3000}",
     "recon:samples": "tsx scripts/run-samples.ts",
-    "test:samples": "tsx scripts/test-samples.ts"
+    "test:samples": "tsx scripts/test-samples.ts",
+    "validate": "tsx scripts/validate-all.ts",
+    "accuracy": "tsx scripts/accuracy-report.ts",
+    "audit": "tsx scripts/audit-report.ts"
   },
   "engines": {
     "node": ">=20.18.0"

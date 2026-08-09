@@ -323,6 +323,7 @@ function parseTallyLedgerAccountPdf(lines: string[], sourceFile: string, sourceS
   type Pending = { date?: string; particulars: string; vchType: string; vchNo: string; amount: number; refs: string[]; sign?: 'Dr' | 'Cr'; narration: string[]; row: number };
   let pending: Pending | undefined;
   let currentDate: string | undefined;
+  let closingSeen = false;
 
   const flush = () => {
     if (!pending) return;
@@ -356,6 +357,19 @@ function parseTallyLedgerAccountPdf(lines: string[], sourceFile: string, sourceS
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (SKIP.test(line)) continue;
+    // "Cr Closing Balance 16,25,780.00" — Tally states the balancing figure on
+    // its own line. Preferring it over our own sum makes the integrity gate a
+    // real check of our reading against the statement's own claim.
+    const stated = line.match(/^(Dr|Cr)?\s*Closing Balance\s*([\d,]+\.\d{2})\s*(Dr|Cr)?$/i);
+    if (stated) {
+      flush();
+      const side = (stated[1] || stated[3] || '').toLowerCase();
+      const amount = parseAmount(stated[2]);
+      // Cr in the counterparty's book = they owe RDC = positive receivable.
+      balances.closing = side === 'dr' ? -amount : amount;
+      closingSeen = true;
+      continue;
+    }
     const totals = line.match(TOTALS_LINE);
     if (totals) {
       // The closing Dr/Cr totals line — the evidence the parse audit needs.
@@ -392,11 +406,12 @@ function parseTallyLedgerAccountPdf(lines: string[], sourceFile: string, sourceS
   flush();
 
   if (transactions.length) {
-    // No opening row printed and the account starts at zero, so the closing
-    // balance is simply what the transactions add up to — which the printed
-    // Dr/Cr totals then verify independently.
     balances.opening = 0;
-    balances.closing = transactions.reduce((s, t) => s + t.signedAmountRdcView, 0);
+    // Prefer the balance the STATEMENT ITSELF declares — then the integrity
+    // gate is a real check of our reading against the document's own claim.
+    // Only when none is printed do we fall back to what the rows add up to,
+    // with the printed Dr/Cr totals still verifying them independently.
+    if (!closingSeen) balances.closing = transactions.reduce((s, t) => s + t.signedAmountRdcView, 0);
     parserLog.push({ sourceFile, level: 'info', message: `Parsed ${transactions.length} rows using the Tally Ledger Account PDF adapter (bill references read from New Ref / Agst Ref lines)`, confidence: 88 });
     if (printedTotals.debit || printedTotals.credit) {
       parserLog.push({ sourceFile, level: 'info', message: `Printed totals captured for the parse audit: Dr ${(printedTotals.debit ?? 0).toFixed(2)} / Cr ${(printedTotals.credit ?? 0).toFixed(2)}`, confidence: 90 });

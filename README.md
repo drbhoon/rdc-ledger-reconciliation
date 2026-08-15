@@ -79,3 +79,23 @@ AI_MAX_ROWS=80
 ```
 
 For deterministic-only testing, set `AI_ENABLED=false`.
+
+### Admin console and usage tracking
+
+`/admin` reports API calls, tokens and cost for any date range, plus every run and a
+CSV export. It needs three more variables:
+
+```text
+DATABASE_URL=<the Railway Postgres connection string>
+ADMIN_USERNAME=<your choice>
+ADMIN_PASSWORD=<your choice>
+```
+
+Add PostgreSQL to the Railway project and reference its connection string as
+`DATABASE_URL`. The `reconciliation_runs` table is created automatically on the first
+reconciliation — there is no migration step.
+
+Both are optional and fail safe: without `DATABASE_URL` reconciliations run exactly as
+before and the console says so; without the admin credentials the console is **closed**,
+not open. Usage logging can never fail a reconciliation, and no ledger content is
+stored — only file names, counts, the verdict and the usage figures.

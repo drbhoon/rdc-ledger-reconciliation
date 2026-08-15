@@ -122,7 +122,41 @@ for an Excel or Tally export.
 
 ---
 
-## 7. For developers
+## 7. Admin console — usage and cost
+
+`https://<your-app>/admin` — sign in with the username and password set in Railway.
+
+It answers "how much did we use in a period": pick a date range (and optionally a
+party) and it shows
+
+- how many reconciliations were run, and how many came out CERTIFIED;
+- **how many OpenAI API calls** those runs made, with tokens and cost in $ and ₹;
+- a per-day breakdown, and a table of every run with its verdict, coverage, cost and
+  the two file names;
+- **Download CSV** for the same period, which opens straight in Excel.
+
+Most runs make **zero** API calls — the file was read by a parser and the AI was never
+needed. A run only calls the API when a file defeats every parser.
+
+The console is read-only and stores no ledger content — only file names, counts, the
+verdict and the usage figures.
+
+### Setting it up in Railway (one time)
+
+1. In the Railway project, **New → Database → Add PostgreSQL**.
+2. On the reconciliation service, add a variable `DATABASE_URL` and set it to the
+   Postgres service's connection string (Railway offers it as a reference variable —
+   pick the private/internal one).
+3. Add `ADMIN_USERNAME` and `ADMIN_PASSWORD` — your choice; they exist only in Railway.
+4. Redeploy. The usage table is created automatically on the first reconciliation.
+
+If `DATABASE_URL` is missing, reconciliations run exactly as before and the console
+says the database is not connected. If `ADMIN_USERNAME`/`ADMIN_PASSWORD` are missing,
+the console stays **closed** rather than open.
+
+---
+
+## 8. For developers
 
 ```bash
 npm run validate

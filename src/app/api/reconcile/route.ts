@@ -8,6 +8,7 @@ import { ledgerIntegrityGap, reconcile } from '@/core/reconcile';
 import { writeReport } from '@/core/report';
 import { emptyAiUsage, estimateCostUsd, getAiConfig, getAiRunState, getAiRunUsage, startAiRun, type AiConfig } from '@/core/aiConfig';
 import { aiEnhanceParseResult, aiEnhanceReconciliation, aiRescueParse, aiVisionRescueParse } from '@/services/aiLedgerService';
+import { recordRun } from '@/core/usageDb';
 import type { ParseResult } from '@/core/types';
 
 async function saveUpload(file: File, dir: string) {
@@ -82,9 +83,13 @@ async function withAiRescue(parsed: ParseResult, filePath: string, fileName: str
 }
 
 export async function POST(req: Request) {
+  const startedAt = Date.now();
+  const runId = uuid();
+  let partyName = 'Customer';
+  let rdcFileName: string | undefined;
+  let customerFileName: string | undefined;
   try {
     const form = await req.formData();
-    const runId = uuid();
     const uploads = path.join(process.cwd(), 'uploads', runId);
     fs.mkdirSync(uploads, { recursive: true });
     const rdcFile = form.get('rdc') as File | null;
@@ -92,7 +97,9 @@ export async function POST(req: Request) {
     if (!rdcFile?.size || !customerFile?.size) {
       return new NextResponse('Please select both RDC and customer ledger files before running reconciliation.', { status: 400 });
     }
-    const partyName = String(form.get('partyName') || 'Customer');
+    partyName = String(form.get('partyName') || 'Customer');
+    rdcFileName = rdcFile.name;
+    customerFileName = customerFile.name;
     const periodStart = String(form.get('periodStart'));
     const periodEnd = String(form.get('periodEnd'));
     const rdcPath = await saveUpload(rdcFile, uploads);
@@ -149,8 +156,10 @@ export async function POST(req: Request) {
     const tokens = getAiRunUsage();
     aiUsage.inputTokens = tokens.input;
     aiUsage.outputTokens = tokens.output;
+    aiUsage.apiCalls = tokens.calls;
     aiUsage.estimatedCostUsd = Math.round(estimateCostUsd(aiConfig.model, tokens.input, tokens.output) * 10000) / 10000;
     aiUsage.rescueRowsExtracted = [rdc, customer].reduce((s, side) => s + side.transactions.filter(t => t.parserNotes?.includes('AI-extracted row (rescue parser)')).length, 0);
+    result.cards.aiApiCalls = tokens.calls;
     result.cards.aiInputTokens = tokens.input;
     result.cards.aiOutputTokens = tokens.output;
     result.cards.aiEstimatedCostUsd = aiUsage.estimatedCostUsd;
@@ -168,10 +177,39 @@ export async function POST(req: Request) {
     const reportPath = path.join(reportsDir, runId + '_reconciliation.xlsx');
     await writeReport(result, reportPath);
     fs.writeFileSync(path.join(reportsDir, runId + '_summary.json'), JSON.stringify({ partyName, cards: result.cards, summaryLines: result.summaryLines, aiUsage: result.aiUsage }, null, 2));
-    console.log(`[reconcile] ${runId} report written`, reportPath, `AI cost ~$${aiUsage.estimatedCostUsd}`);
+    console.log(`[reconcile] ${runId} report written`, reportPath, `${tokens.calls} AI call(s), cost ~$${aiUsage.estimatedCostUsd}`);
+    // Usage log. Deliberately after the report is written and never awaited in
+    // a way that could fail the response — see recordRun.
+    await recordRun({
+      runId, partyName, periodStart, periodEnd, rdcFile: rdcFileName, customerFile: customerFileName,
+      rdcRows: rdc.transactions.length, customerRows: customer.transactions.length,
+      matchedCount: result.matches.length,
+      unmatchedRdcCount: result.unmatchedRdc.length,
+      unmatchedCustomerCount: result.unmatchedCustomer.length,
+      matchedCoveragePct: Number(result.cards.matchedCoveragePct) || 0,
+      verdict: String(result.cards.verdict || ''),
+      certified: result.cards.certified === true,
+      rdcAudit: rdc.audit?.verdict, customerAudit: customer.audit?.verdict,
+      unexplainedDifference: Number(result.cards.unexplainedDifference) || 0,
+      aiEnabled: aiConfig.enabled, aiModel: aiConfig.model,
+      aiCalls: tokens.calls, aiInputTokens: tokens.input, aiOutputTokens: tokens.output,
+      aiCostUsd: aiUsage.estimatedCostUsd || 0,
+      aiRescueRows: aiUsage.rescueRowsExtracted || 0,
+      durationMs: Date.now() - startedAt, status: 'COMPLETED',
+    }).catch(error => console.error('[usage-db] recordRun failed', error));
     return NextResponse.json({ runId, reportPath, cards: result.cards, summaryLines: result.summaryLines, aiUsage: result.aiUsage });
   } catch (err) {
     console.error('[reconcile] failed', err);
+    const usage = getAiRunUsage();
+    await recordRun({
+      runId, partyName, rdcFile: rdcFileName, customerFile: customerFileName,
+      rdcRows: 0, customerRows: 0, matchedCount: 0, unmatchedRdcCount: 0, unmatchedCustomerCount: 0,
+      matchedCoveragePct: 0, verdict: 'FAILED', certified: false, unexplainedDifference: 0,
+      aiEnabled: !!process.env.OPENAI_API_KEY, aiModel: process.env.OPENAI_MODEL,
+      aiCalls: usage.calls, aiInputTokens: usage.input, aiOutputTokens: usage.output,
+      aiCostUsd: 0, aiRescueRows: 0, durationMs: Date.now() - startedAt,
+      status: 'FAILED', errorMessage: err instanceof Error ? err.message.slice(0, 500) : 'unknown',
+    }).catch(() => undefined);
     return new NextResponse(err instanceof Error ? err.message : 'Reconciliation failed unexpectedly', { status: 500 });
   }
 }

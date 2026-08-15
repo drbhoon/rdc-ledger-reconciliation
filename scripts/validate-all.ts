@@ -25,6 +25,7 @@ const SUITES: Suite[] = [
   { name: 'Round 15   Mosh (reconciliation workbook)', script: 'validate-fixes-10.ts', needs: 'test-data-270726' },
   { name: 'Round 16   Henna (stated closing balance)', script: 'validate-fixes-11.ts', needs: 'test-data-280726' },
   { name: 'AI rescue  (offline, no API calls)', script: 'validate-rescue.ts' },
+  { name: 'Usage log  (offline, no database)', script: 'validate-usage.ts' },
 ];
 
 const root = process.cwd();

@@ -166,6 +166,7 @@ function addCertificate(wb: ExcelJS.Workbook, result: ReconcileResult) {
   if (ai?.enabled) {
     ws.addRow([]);
     ws.addRow(['AI model', ai.model]);
+    ws.addRow(['AI requests made by this run', ai.apiCalls ?? 0]);
     ws.addRow(['AI tokens (input / output)', `${(ai.inputTokens ?? 0).toLocaleString('en-IN')} / ${(ai.outputTokens ?? 0).toLocaleString('en-IN')}`]);
     const usd = ai.estimatedCostUsd ?? 0;
     ws.addRow(['Estimated AI cost of this run', `$${usd.toFixed(4)}  (~₹${(usd * 87).toFixed(2)})`]);

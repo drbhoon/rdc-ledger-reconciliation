@@ -98,6 +98,7 @@ export function emptyAiUsage(config = getAiConfig()): AiUsageStats {
     autoAccepted: 0,
     requiresHumanReview: 0,
     rescueRowsExtracted: 0,
+    apiCalls: 0,
     inputTokens: 0,
     outputTokens: 0,
     estimatedCostUsd: 0,

@@ -84,6 +84,8 @@ export type AiUsageStats = {
   autoAccepted: number;
   requiresHumanReview: number;
   rescueRowsExtracted?: number;
+  /** Successful OpenAI requests made by this run. */
+  apiCalls?: number;
   inputTokens?: number;
   outputTokens?: number;
   estimatedCostUsd?: number;

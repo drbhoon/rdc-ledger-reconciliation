@@ -18,6 +18,8 @@ const ROOT = path.resolve(__dirname, '..');
 const P = (...p: string[]) => path.join(ROOT, ...p);
 const NEW = 'test-data-060726/Ledger Recon New Testing_060726';
 const OLD = 'test-data';
+const AUG = 'test-data-190826';
+const AUGR = 'test-data-190826/AI Reconciliation  File';
 
 // One entry per distinct customer (latest available ledgers).
 const PAIRS: Array<{ name: string; rdc: string; cust: string }> = [
@@ -29,6 +31,22 @@ const PAIRS: Array<{ name: string; rdc: string; cust: string }> = [
   { name: 'Pratha',   rdc: P('Pratha Constructions -rdc ledger.xlsx'),     cust: P('Pratha Constructions -customer ledger.xlsx') },
   { name: 'Suruchi',  rdc: P('Suruchi Developers- RDC Ledger.xlsx'),       cust: P('Suruchi Developers -customer Ledger.xlsx') },
   { name: 'Bearys',   rdc: P('bearys - RDC -ledger.xlsx'),                  cust: P('beays  - customer-ledger.xlsx') },
+  // The 19-Aug-26 batch: eleven readable pairs across three teams, plus Preet
+  // Traders, whose customer ledger is a photographed PDF with no text layer.
+  // Preet reports as PARSE=0 (guarded) and is excluded from the ratio - locally
+  // there is no OpenAI key, so the vision rescue that could read it cannot run.
+  { name: 'Afita',     rdc: P(AUG, 'RDC-Afita-Mumbai.xlsx'),   cust: P(AUG, 'Afita-Mumbai.xlsx') },
+  { name: 'Atlas',     rdc: P(AUG, 'RDC-Atlas-Mumbai.xlsx'),   cust: P(AUG, 'Atlas-Mumbai.xlsx') },
+  { name: 'Ecoform',   rdc: P(AUG, 'RDC-Ecoform-Mumbai.xlsx'), cust: P(AUG, 'Ecoform-Mumbai.xlsx') },
+  { name: 'Premix',    rdc: P(AUG, 'RDC-Premix-Mumbai.xlsx'),  cust: P(AUG, 'Premix-Mumbai.xlsx') },
+  { name: 'ShreeRam',  rdc: P(AUG, 'Shree Ram Ent 31Jul26 - 19-8.xls'), cust: P(AUG, 'Vend Shree Ram Ent 31Jul.26.xls') },
+  { name: 'Preet',     rdc: P(AUG, 'Preet Traders 31mar26.xls'),        cust: P(AUG, 'Vend Preet Traders 31Mar26.pdf') },
+  { name: 'PAMR',      rdc: P(AUGR, 'PAMR Industries Reco/RDC SOA VENDOR.xlsx'), cust: P(AUGR, 'PAMR Industries Reco/PAMR SOA.xlsx') },
+  { name: 'UltraTech', rdc: P(AUGR, 'RDC VS ULTRATECH/RDC LEDGER.xlsx'),         cust: P(AUGR, 'RDC VS ULTRATECH/ULTRATECH LEDGER.xlsx') },
+  { name: 'SPJ',       rdc: P(AUGR, 'SPJ Reco/RDC SOA.xls'),                     cust: P(AUGR, 'SPJ Reco/SPJ PROPERTIES PRIVATE LIMITED SOA.xlsx') },
+  { name: 'SSSS',      rdc: P(AUGR, 'SS SS Constrution/RDC SS SS Cons Ledger.xls'), cust: P(AUGR, 'SS SS Constrution/SS SS Constructions Pvt Ltd  Ledger.pdf') },
+  { name: 'ShriKaila', rdc: P(AUGR, 'Shri Kaila Construction/SKC - RDC Ledger.xls'), cust: P(AUGR, 'Shri Kaila Construction/SKC - Customer Ledger.pdf') },
+  { name: 'ZCC',       rdc: P(AUGR, 'ZCC Techno Private Reco/RDC Ledger ZCC.xlsx'),  cust: P(AUGR, 'ZCC Techno Private Reco/ZCC Techno SOA.xlsx') },
 ];
 
 const inr = (n: number) => (n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });

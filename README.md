@@ -24,12 +24,17 @@ Three rules the code is held to, agreed after the first rounds of testing:
 
 - **RDC exports:** debtors and creditors (payable) layouts, Excel / CSV / PDF.
 - **Customer ledgers:** the mirror of the RDC layout; Tally parent-child allocations,
-  columnar registers and "Ledger Account" prints; ERP exports that split one voucher
-  across several account rows; customer-maintained invoice registers where one row
-  carries both an invoice and a payment; SAP statements of account.
+  columnar registers and "Ledger Account" prints; the Tally *columnar* print, which has
+  no debit/credit pair at all and one money column per contra account; ERP exports that
+  split one voucher across several account rows; customer-maintained invoice registers
+  where one row carries both an invoice and a payment; SAP and AP statements of account
+  keyed only on a document number.
 - **Matching:** exact reference, truncated reference, near-identical reference (as a
   second pass, so it can never steal a row that has an exact partner), grouped
   payments by allocation or cheque, short receipts, and cancelled-invoice netting.
+  When the counterparty ledger carries no document references at all — a Tally print
+  whose voucher number is the customer's own serial — invoices are matched on amount
+  and date instead, and every such pair says so in its Remarks.
 - **Reporting:** a certificate, a parse audit, the reconciliation statement grouped
   by document type, duplicates, large-variance checks and a full parser log.
 

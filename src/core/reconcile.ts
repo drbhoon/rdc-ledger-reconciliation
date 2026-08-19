@@ -164,6 +164,25 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     }
     return false;
   };
+  // Some counterparty ledgers carry no document references at all: a Tally
+  // print whose "Vch No." is the customer's own serial (Ecoform: 555, 556, 557)
+  // never names an RDC invoice. Reference matching is then impossible by
+  // construction, and amount + date is exactly what the accounts team matches
+  // on by hand. Without this, 134 RDC invoices and 157 customer invoices - the
+  // SAME 48.89 lakh of concrete - were listed on both Unmatched sheets, which
+  // is the "far more line items than the manual reco" the team reported.
+  // Deliberately narrow: it only engages when the counterparty ledger has
+  // essentially no references while RDC's does, so it can never take a row
+  // that reference matching could have claimed.
+  const refCoverage = (rows: NormalizedTxn[]) => {
+    const money = rows.filter(t => Math.abs(t.signedAmountRdcView) > 0.005);
+    if (!money.length) return 1;
+    return money.filter(t => (t.normalizedReferenceNo || '').length >= 4).length / money.length;
+  };
+  const customerLacksReferences = refCoverage(activeCustomer) < 0.1 && refCoverage(rdc.transactions) > 0.5;
+  if (customerLacksReferences) {
+    customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'warn', message: 'The customer ledger carries no document references, so invoices are matched on amount and date instead. Every such pair says so in its Remarks - check a sample before sending the statement out.', confidence: 70 });
+  }
   const tryMatch = (rdcTxn: NormalizedTxn, candidates: NormalizedTxn[], types: VoucherType[], dateTolerance: number, amountTolerance: number) => {
     const rref = refKey(rdcTxn);
     const rcol = collapsedKey(rdcTxn);
@@ -211,7 +230,11 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
       // amount and date agree — that is a match, not a review item
       // (accounts-team feedback, Dalmia 2026-07: "invoice number entered
       // differently by each party though amount and date match").
-      if (amountOk && dateOk && !best) best = { txn: c, confidence: 72, reason: 'Amount and date near; review required' };
+      if (amountOk && dateOk && !best) {
+        best = customerLacksReferences
+          ? { txn: c, confidence: 80, reason: `Matched on amount and date (${days} day(s) apart) — the customer ledger carries no document references to match on` }
+          : { txn: c, confidence: 72, reason: 'Amount and date near; review required' };
+      }
     }
     return refBest || colBest || best;
   };
@@ -583,11 +606,22 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   // self-consistent (everything dumped into Add/Less buckets), so it must be
   // blocked from certification explicitly ("never confidently wrong").
   const nothingMatched = matches.length === 0 && rdc.transactions.length >= 10 && customer.transactions.length >= 10;
+  // A ledger that yielded NO rows cannot support a reconciliation at all. The
+  // arithmetic still closes — every row on the populated side simply lands in
+  // an Add/Less bucket and the identity holds — so without an explicit block
+  // an unreadable counterparty file came out CERTIFIED with zero matches
+  // (SPJ and Ultratech: 0 customer rows, verdict CERTIFIED). That is the exact
+  // "confidently wrong" outcome the certificate exists to prevent.
+  const emptyLedger = rdc.transactions.length === 0 || customer.transactions.length === 0;
   // A ledger whose rows fail their own arithmetic cannot support a certified
   // reconciliation, however well the totals happen to tie.
   const auditFailed = [rdc.audit, customer.audit].some(a => a?.verdict === 'FAIL');
-  const certified = rdcTied && custTied && explained && !nothingMatched && !auditFailed;
+  const certified = rdcTied && custTied && explained && !nothingMatched && !auditFailed && !emptyLedger;
   const verdict = certified ? 'CERTIFIED' : 'REVIEW REQUIRED';
+  if (emptyLedger) {
+    const side = rdc.transactions.length === 0 ? 'RDC' : 'customer';
+    customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'error', message: `Certification blocked: the ${side} ledger yielded ZERO transactions — nothing was compared. The statement below reflects one side only and must not be sent to the counterparty.`, confidence: 0 });
+  }
   if (nothingMatched) customer.parserLog.push({ sourceFile: customer.transactions[0]?.sourceFile || 'customer', level: 'error', message: 'Certification blocked: ZERO rows matched between the two ledgers — this points to a format/orientation parsing problem, not a genuine reconciliation. Review both ledgers.', confidence: 0 });
   const cards = { rdcParseAudit: rdc.audit?.verdict ?? 'NOT_RUN', customerParseAudit: customer.audit?.verdict ?? 'NOT_RUN', parseAuditFailedRows: (rdc.audit?.issues.length ?? 0) + (customer.audit?.issues.length ?? 0), matchedCount: matches.length, possibleCount: possibleMatches.length, unmatchedRdcCount: unmatchedRdc.length, unmatchedCustomerCount: unmatchedCustomer.length, outsidePeriodCustomerCount: outsidePeriodCustomer.length, netZeroReversalCount: netZeroReversals.length, journalEntriesConsidered: journalEntries.length, tdsExceptionCount: tdsCompare.filter(t => t.matchStatus !== 'MATCHED').length, unexplainedDifference: unexplained, rdcLedgerIntegrityGap: Math.round((rdcGap || 0) * 100) / 100, customerLedgerIntegrityGap: Math.round((custGap || 0) * 100) / 100, matchedCoveragePct, certified, verdict };
   if (rdcGap != null && Math.abs(rdcGap) > 1) rdc.parserLog.push({ sourceFile: rdc.transactions[0]?.sourceFile || 'rdc', level: 'error', message: `RDC ledger integrity check FAILED: parsed rows differ from stated closing balance by ${rdcGap.toFixed(2)} — some rows were misread or missed`, confidence: 0 });

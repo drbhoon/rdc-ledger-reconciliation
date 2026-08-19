@@ -7,6 +7,7 @@ import { extractChequeNo, extractReferences, hasTruncatedReference, normalizeRef
 import { parseGenericWorkbook } from './genericSheet';
 import { parseSplitVoucherWorkbook } from './splitVoucherSheet';
 import { parseInvoiceRegisterWorkbook } from './invoiceRegisterSheet';
+import { parseTallyColumnarWorkbook } from './tallyColumnarSheet';
 import type { NormalizedTxn, ParseResult, ParserLogRow, PrintedTotals, VoucherType } from '../types';
 
 type Row = Record<string, unknown> & { __rowNum__: number };
@@ -16,7 +17,14 @@ function headerRowIndex(ws: XLSX.WorkSheet) {
     const text = row.map((c) => String(c).toLowerCase()).join('|');
     return text.includes('date') && (text.includes('doc type') || text.includes('vch type') || text.includes('particulars') || text.includes('gst inv'));
   });
-  return idx >= 0 ? idx : 0;
+  // sheet_to_json({header:1}) yields rows from the sheet's USED range, so index
+  // 0 is the first used row - but the `range` option that consumes this number
+  // counts absolute worksheet rows. On a sheet whose data starts below row 1
+  // the two disagree and the header lands short, keying every column as
+  // __EMPTY_n: Atlas (!ref = A3:J300) then had no Date column at all, so the
+  // Tally reader saw a dateless file and half the ledger was lost.
+  const origin = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']).s.r : 0;
+  return (idx >= 0 ? idx : 0) + origin;
 }
 function normHeader(v: string) { return v.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 function pick(row: Row, names: string[]) {
@@ -175,6 +183,7 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
     }
   }
   const seenAcrossSheets = new Map<string, string>();
+  const genericSheets = new Set<string>();
   for (const sheetName of wb.SheetNames) {
     if (rdcSheets.size && !rdcSheets.has(sheetName)) {
       parserLog.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: 'Skipped: this sheet is not an RDC ledger export (working paper, annexure or the other party\'s ledger)', confidence: 85 });
@@ -195,10 +204,25 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
     const creditorLedger = /creditor|vendor name|vendor site/.test(sheetName.toLowerCase() + '|' + headerText);
     parserLog.push({ sourceFile, sourceSheet: sheetName, level: 'info', message: 'Detected ' + kind + ' ledger layout' + (kind === 'RDC' && side === 'CUSTOMER' ? ' (customer vendor-ledger mirror: bills=Cr, payments=Dr)' : '') + (creditorLedger && side === 'RDC' ? ' (RDC creditor/payable ledger: bills=Cr, payments=Dr)' : ''), confidence: 90 });
     if (kind === 'RDC') parseRdcRows(rows, sourceFile, sheetName, transactions, balances, parserLog, side, creditorLedger && side === 'RDC', printedTotals, seenAcrossSheets);
+    // "GENERIC" means the sheet is neither an RDC export nor a Tally print -
+    // a flat register with its own Debit/Credit and type columns. Handing it to
+    // the Tally parent/child reader made a mess of it (Mosh: 760 rows in a
+    // nameless "Other entries" bucket, a duplicate invoice swallowed, coverage
+    // halved); the generic adapter is the reader built for that shape.
+    else if (kind === 'GENERIC') genericSheets.add(sheetName);
     else parseCustomerRows(rows, sourceFile, sheetName, transactions, balances, parserLog);
+  }
+  if (genericSheets.size) {
+    parseGenericWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog, printedTotals, genericSheets);
   }
   // Deterministic safety net: none of the known layouts read a single row —
   // hunt for a ledger table generically before anyone reaches for the AI.
+  // The columnar Tally print goes first: it has no Dr/Cr pair at all, so the
+  // generic reader cannot see it as a ledger, and it proves itself against the
+  // balance the file prints before it accepts anything.
+  if (!transactions.length) {
+    parseTallyColumnarWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog);
+  }
   if (!transactions.length) {
     parseGenericWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog, printedTotals);
   }
@@ -265,6 +289,19 @@ function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out:
   }
 }
 function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[]) {
+  // One printed sheet can hold several ledger blocks back to back - the same
+  // party at two sites, each starting with its own "Opening Balance" and
+  // sharing one closing total at the end (Atlas: A/ANAND then KRUPA). The
+  // second opening used to overwrite the first, losing 5,20,981.80 and leaving
+  // the whole ledger unable to tie.
+  let openingBlocks = 0;
+  const addOpening = (value: number, sourceRow?: number) => {
+    openingBlocks += 1;
+    balances.opening = (openingBlocks > 1 ? (balances.opening || 0) : 0) + value;
+    log.push({ sourceFile, sourceSheet, sourceRow, level: 'info', message: openingBlocks > 1
+      ? `Captured a further opening balance (${value.toFixed(2)}) - this sheet holds ${openingBlocks} ledger blocks; openings summed to ${(balances.opening || 0).toFixed(2)}`
+      : 'Captured customer opening balance separately', confidence: 90 });
+  };
   let parent: Row | undefined;
   let parentBase: { voucherNo?: string; date?: string; vchType?: string; particulars?: string; debit: number; credit: number } | undefined;
   let parentHadChildren = false;
@@ -276,6 +313,15 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
   const flushParent = () => {
     const base = baseWithDetails();
     if (parent && base && !parentHadChildren) addCustomerTxn(parent, base, '', base.debit, base.credit, '');
+    // The pending voucher MUST be released here. Tally prints two or three
+    // trailing rows (period totals, "Closing Balance", the grand total) and
+    // each of them flushes; without clearing, the ledger's last dated row was
+    // emitted once per trailing row. That double-count is invisible in the row
+    // list and surfaces only as an integrity gap exactly equal to the last
+    // transaction (Afita 21,31,400 / Ecoform 1,25,906 / ZCC 50,000).
+    parent = undefined;
+    parentBase = undefined;
+    parentHadChildren = false;
     parentDetailLines = [];
   };
   const addCustomerTxn = (row: Row, base: NonNullable<typeof parentBase>, refText: string, debit: number, credit: number, allocationType: 'New Ref' | 'Agst Ref' | 'Inferred' | '') => {
@@ -295,13 +341,17 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
     let confidence = refs.length ? 88 : 78;
     if (hasTruncatedReference([particulars, refText])) { confidence = 55; notes.push('LOW_PARSE_CONFIDENCE_REFERENCE_NOT_EXTRACTED'); }
     const txn = buildTxn({ sourceSide: 'CUSTOMER', sourceFile, sourceSheet, sourceRow: row.__rowNum__, date: base.date, voucherType, voucherNo: base.voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo), extractedReferences: refs, parentVoucherNo: allocationType ? base.voucherNo : undefined, chequeNo: extractChequeNo([particulars, base.voucherNo]), allocationType, particulars, narration: particulars, debit, credit, signedAmountRdcView: signedFromDebitCredit('CUSTOMER', debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: confidence, parserNotes: notes });
-    if (voucherType === 'OPENING') { balances.opening = txn.signedAmountRdcView; balances.openingRows?.push(txn); return; }
+    if (voucherType === 'OPENING') { addOpening(txn.signedAmountRdcView, row.__rowNum__); balances.openingRows?.push(txn); return; }
     if (voucherType === 'CLOSING') { balances.closing = txn.signedAmountRdcView; balances.closingRows?.push(txn); return; }
     // Zero-amount rows (informational sub-allocations) contribute nothing and
     // can wrongly consume a reference match — drop them.
     if (!txn.debit && !txn.credit) return;
     out.push(txn);
   };
+  // Tally groups consecutive vouchers under one printed date: the second and
+  // later vouchers of the same day leave the Date cell blank. See the
+  // carry-forward branch near the bottom of this loop.
+  let lastDate: string | undefined;
   for (const row of rows) {
     const date = parseDate(pick(row, ['Date']));
     const particulars = [pick(row, ['Particulars','Narration']), (row as any).__EMPTY, (row as any).__EMPTY_1].filter(Boolean).join(' | ');
@@ -311,6 +361,7 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
     const credit = absAmount(pick(row, ['Credit','Cr']));
     if (date) {
       flushParent();
+      lastDate = date;
       parent = row;
       parentHadChildren = false;
       parentBase = { voucherNo: vchNo, date, vchType, particulars, debit, credit };
@@ -319,8 +370,7 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
     const line = Object.values(row).join(' | ');
     if (/opening balance/i.test(line)) {
       flushParent();
-      balances.opening = balanceAmount(row) * balanceSign(row);
-      log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: 'Captured customer opening balance separately', confidence: 90 });
+      addOpening(balanceAmount(row) * balanceSign(row), row.__rowNum__);
       continue;
     }
     if (/closing balance/i.test(line)) {
@@ -363,6 +413,25 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
       const childCredit = credit || (side === 'cr' ? allocAmount : 0);
       const refLine = [String((row as any).__EMPTY || ''), allocRef, allocAmount ? String(allocAmount) : '', side].filter(Boolean).join(' ');
       addCustomerTxn(row, baseWithDetails() || parentBase, refLine, childDebit, childCredit, /New Ref/i.test(line) ? 'New Ref' : 'Agst Ref');
+      continue;
+    }
+    // A dateless row carrying its OWN voucher number and amount is not a
+    // sub-line of the row above - it is the next voucher of the same day,
+    // printed with the date cell left blank. Treated as a detail line its
+    // amount was silently dropped: Atlas lost 154 of 275 rows (43.5 lakh) and
+    // the reconciliation blamed the hole on the customer. The voucher NUMBER is
+    // the test, not the voucher type: Tally spills the type into the next
+    // column on some rows, which left six more payments (9.66 lakh) behind.
+    // Bill allocations are excluded by their markers and handled above;
+    // opening/closing/total rows are consumed by the branches above this one.
+    const isSameDayVoucher = !date && lastDate && (debit || credit) && vchNo.trim()
+      && !/New Ref|Agst Ref|On Account|Advance/i.test(line)
+      && vchNo.trim() !== (parentBase?.voucherNo || '').trim();
+    if (isSameDayVoucher) {
+      flushParent();
+      parent = row;
+      parentHadChildren = false;
+      parentBase = { voucherNo: vchNo, date: lastDate, vchType, particulars, debit, credit };
       continue;
     }
     if (parentBase) {

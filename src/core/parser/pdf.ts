@@ -457,6 +457,13 @@ function isTotalLine(line: string) {
   return /^\d{1,3}(?:,\d{2,3})*(?:\.\d{2})\d{1,3}(?:,\d{2,3})*(?:\.\d{2})$/.test(line);
 }
 
+// Tally's own voucher-type words. In some prints the type sits where the
+// voucher number is expected ("Cr PNB A/C SKC (1247) Current A/c Payment
+// 10,00,000.00"), so the word must be recognised as a TYPE rather than filed as
+// a reference - ten payments worth 1.01 crore were landing in a nameless
+// "Other entries" bucket, and RDC's matching receipts were reported unbooked.
+const TALLY_VOUCHER_WORD = /^(payment|receipt|purchase|sales|sale|journal|contra|credit note|debit note|jv)$/i;
+
 function tallyVoucherType(vchType: string, particulars: string, amountSign: 'DR' | 'CR', refs: string[]): VoucherType {
   const text = `${vchType} ${particulars}`.toLowerCase();
   if (/payment|receipt|bank|control|ho - payment/.test(text)) return 'PAYMENT';
@@ -531,10 +538,14 @@ function parseTallyPdfRows(lines: string[], sourceFile: string, sourceSide: PdfS
     }
 
     const refs = extractReferences([text]);
-    const referenceNo = refs[0] || (/^[A-Z0-9/-]{5,}$/i.test(voucherNo) ? voucherNo : '');
+    // A voucher-type word standing in the voucher-number position is the type,
+    // not a document reference: filing "Payment" as a reference also made it a
+    // match key shared by every payment in the ledger.
+    const voucherWord = TALLY_VOUCHER_WORD.test(voucherNo.trim()) ? voucherNo.trim() : '';
+    const referenceNo = refs[0] || (!voucherWord && /^[A-Z0-9/-]{5,}$/i.test(voucherNo) ? voucherNo : '');
     const debit = amountSign === 'DR' ? amount : 0;
     const credit = amountSign === 'CR' ? amount : 0;
-    const voucherType = tallyVoucherType(vchType, particulars, amountSign, refs);
+    const voucherType = tallyVoucherType(vchType || voucherWord, particulars, amountSign, refs);
     transactions.push(makePdfTxn({
       sourceSide,
       sourceFile,

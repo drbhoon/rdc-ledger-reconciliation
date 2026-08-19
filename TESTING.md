@@ -85,6 +85,11 @@ Unexplained Difference                                              0.00
 **Unexplained Difference must be zero.** If it is not, the app is telling you it
 cannot account for that amount — treat the reconciliation as incomplete.
 
+**A line reading "Customer ledger rows not fully captured by parser"** means the rows
+the app read do not add up to the closing balance the file itself prints. The
+reconciliation is arithmetically closed but built on an incomplete reading — send that
+pair in rather than working from it.
+
 ---
 
 ## 5. When something looks wrong
@@ -110,10 +115,15 @@ been turned into a permanent automated check.
 ## 6. File formats that are handled
 
 Excel and CSV in the RDC debtors and creditors layouts; the customer-side mirror of
-the RDC layout; Tally exports (parent-child allocations, columnar registers, and the
-"Ledger Account" print); ERP exports that split one voucher across several account
-rows; customer-maintained invoice registers where a row holds both an invoice and a
-payment; SAP statements of account; and several PDF ledger layouts.
+the RDC layout; Tally exports (parent-child allocations, columnar registers, the
+"Ledger Account" print, and the columnar print that has one money column per contra
+account instead of debit/credit); ERP exports that split one voucher across several
+account rows; customer-maintained invoice registers where a row holds both an invoice
+and a payment; SAP and AP statements of account; and several PDF ledger layouts.
+
+**If a spreadsheet will not read**, the message now says so plainly instead of blaming
+a scan. Send the file in — an unfamiliar layout is fixed by teaching the parser, and
+re-exporting it rarely helps.
 
 **PDFs that are scans or photographs have no text to read.** The app will attempt them
 with AI and then *refuse* the result unless the extracted rows reproduce the

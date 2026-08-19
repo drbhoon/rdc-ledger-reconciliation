@@ -24,6 +24,7 @@ const SUITES: Suite[] = [
   { name: 'Round 14   AFA (invoice register)', script: 'validate-fixes-9.ts', needs: 'test-data-260726' },
   { name: 'Round 15   Mosh (reconciliation workbook)', script: 'validate-fixes-10.ts', needs: 'test-data-270726' },
   { name: 'Round 16   Henna (stated closing balance)', script: 'validate-fixes-11.ts', needs: 'test-data-280726' },
+  { name: 'Round 17   19-Aug batch (12 pairs)', script: 'validate-fixes-12.ts', needs: 'test-data-190826' },
   { name: 'AI rescue  (offline, no API calls)', script: 'validate-rescue.ts' },
   { name: 'Usage log  (offline, no database)', script: 'validate-usage.ts' },
 ];

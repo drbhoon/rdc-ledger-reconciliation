@@ -117,16 +117,25 @@ export async function POST(req: Request) {
     if (!rdc.transactions.length) {
       return new NextResponse(
         `Could not read any transactions from the RDC ledger "${rdcFile.name}" (AI rescue also failed). ` +
-        'Please upload the RDC debtors ledger as Excel, or contact support with this file.',
+        'Check that the file is the ledger export itself rather than a summary or covering sheet, then send it to support with this message.',
         { status: 422 });
     }
     if (!customer.transactions.length) {
       const why = getAiRunState().lastError;
+      // The advice has to match the file the team actually uploaded. Telling
+      // somebody their .xlsx "holds no readable text layer - a scan, a photo"
+      // sent two teams looking for a scanner problem that did not exist
+      // (SPJ Properties and UltraTech were both spreadsheets).
+      const isPdf = /\.pdf$/i.test(customerFile.name);
       return new NextResponse(
         `Could not read any transactions from the customer ledger "${customerFile.name}".` +
         (aiConfig.enabled ? ' AI text and image rescue were both attempted and failed.' : ' AI rescue is disabled (set AI_ENABLED=true).') +
-        ' This happens when the PDF holds no readable text layer — a scan, a photo, or a print-to-PDF whose text is drawn as outlines.' +
-        ' The reliable fix is the customer ledger as Excel/CSV (or a Tally export).' +
+        (isPdf
+          ? ' This usually means the PDF holds no readable text layer — a scan, a photo, or a print-to-PDF whose text is drawn as outlines.' +
+            ' The reliable fix is the customer ledger as Excel/CSV (or a Tally export).'
+          : ' The file opened, but no ledger table could be found in it — check that the sheet holds the ledger itself (a date column with debit/credit or amount columns)' +
+            ' rather than a summary, a pivot or a covering page, and that the export is not password-protected or filtered.' +
+            ' Please send this file to support: an unrecognised layout is fixed by teaching the parser, not by re-exporting.') +
         (why ? ` Technical detail: ${why}` : ''),
         { status: 422 });
     }

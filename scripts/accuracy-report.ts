@@ -20,6 +20,10 @@ const NEW = 'test-data-060726/Ledger Recon New Testing_060726';
 const OLD = 'test-data';
 const AUG = 'test-data-190826';
 const AUGR = 'test-data-190826/AI Reconciliation  File';
+const G30 = 'test-data-300826';
+const N30 = 'test-data-300826-nitesh';
+const S30 = 'test-data-300826-suliman';
+const M30 = 'test-data-300826-makrand';
 
 // One entry per distinct customer (latest available ledgers).
 const PAIRS: Array<{ name: string; rdc: string; cust: string }> = [
@@ -47,6 +51,21 @@ const PAIRS: Array<{ name: string; rdc: string; cust: string }> = [
   { name: 'SSSS',      rdc: P(AUGR, 'SS SS Constrution/RDC SS SS Cons Ledger.xls'), cust: P(AUGR, 'SS SS Constrution/SS SS Constructions Pvt Ltd  Ledger.pdf') },
   { name: 'ShriKaila', rdc: P(AUGR, 'Shri Kaila Construction/SKC - RDC Ledger.xls'), cust: P(AUGR, 'Shri Kaila Construction/SKC - Customer Ledger.pdf') },
   { name: 'ZCC',       rdc: P(AUGR, 'ZCC Techno Private Reco/RDC Ledger ZCC.xlsx'),  cust: P(AUGR, 'ZCC Techno Private Reco/ZCC Techno SOA.xlsx') },
+  // The 30-Aug-26 batch: fourteen customers from five teams.
+  { name: 'DSR',       rdc: P(G30, 'RDC LEDGER DSR.xlsx'),          cust: P(G30, 'DSR LEDGER.xlsx') },
+  { name: 'Sundew',    rdc: P(G30, 'RDC LEDGER  SUNDEW.xlsx'),      cust: P(G30, 'SUNDEW LEDGER.xlsx') },
+  { name: 'SRR',       rdc: P(G30, 'RDC LEDGER SRR.xlsx'),          cust: P(G30, 'SRR LEDGER.xlsx') },
+  { name: 'Suroj-Aug', rdc: P(G30, 'RDC LEDGER.XLSX'),              cust: P(G30, 'SUROJ LEDGER 2.xlsx') },
+  { name: 'AGA',       rdc: P(G30, 'RDC AGA INFRA LEDGER.xlsx'),    cust: P(G30, 'AGA LEDGER.xlsx') },
+  { name: 'LotusVilla',rdc: P(N30, 'Lotus Villa RDC Ledger.xlsx'),  cust: P(N30, 'Lotus Client Ledger.pdf') },
+  { name: 'Honeybird', rdc: P(N30, 'Honeybird RDC Ledger.xlsx'),    cust: P(N30, 'Honeybird Client Ledger.xlsx') },
+  { name: 'AVK',       rdc: P(N30, 'A V K WAREHOUSING PVT LTD.xlsx'), cust: P(N30, 'AVK Client Ledger.pdf') },
+  { name: 'KBS',       rdc: P(S30, 'KBS CONSTRUCTIONS RDC LEDGER 31MAR26.xls'), cust: P(S30, 'KBS CONSTRUCTION LEDGER.xlsx') },
+  { name: 'Pressmatic',rdc: P(S30, 'PRESSMATIC RDC LEDGER.xlsx'),   cust: P(S30, 'PRESSMATIC LEDGER.xlsx') },
+  { name: 'AFA-Aug',   rdc: P(M30, 'RDC AFA INFRA PRIVATE LIMITED (1).xlsx'), cust: P(M30, 'AFA LEDGER (1).xlsx') },
+  { name: 'Mosh-Aug',  rdc: P(M30, 'RDC Mosh Ledger (1) (1).xlsx'), cust: P(M30, 'mosh ledger (1) (1).xlsx') },
+  { name: 'MVR',       rdc: P(M30, 'RDC MVR ledger.xlsx'),          cust: P(M30, 'MVR ledger.xlsx') },
+  { name: 'GK',        rdc: P(M30, 'G K ENTERPRISES RDC.xlsx'),     cust: P(M30, 'G K ENTERPRISES.xlsx') },
 ];
 
 const inr = (n: number) => (n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });

@@ -8,6 +8,7 @@ import { parseGenericWorkbook } from './genericSheet';
 import { parseSplitVoucherWorkbook } from './splitVoucherSheet';
 import { parseInvoiceRegisterWorkbook } from './invoiceRegisterSheet';
 import { parseTallyColumnarWorkbook } from './tallyColumnarSheet';
+import { parseSapLineItemWorkbook } from './sapLineItemSheet';
 import type { NormalizedTxn, ParseResult, ParserLogRow, PrintedTotals, VoucherType } from '../types';
 
 type Row = Record<string, unknown> & { __rowNum__: number };
@@ -143,11 +144,36 @@ function classifyCustomer(vch: string, particulars: string, debit: number, credi
     if (refs.length && credit > 0) return 'JOURNAL_INVOICE';
     return 'JOURNAL_ADJUSTMENT';
   }
-  if (/purchase|local purchases/.test(t) || (refs.length && credit > 0)) return 'INVOICE';
-  if (/bank payment|payment|receipt/.test(t) || debit > 0) return 'PAYMENT';
+  // What the row CALLS itself decides what it is. The Dr/Cr sign is only a
+  // last resort, and it used to be consulted first: a row whose voucher type
+  // read "Debit Note" but whose amount sat in the Debit column was filed as a
+  // receipt (DSR: 11 debit notes against RDC credit notes), and a row reading
+  // "GST INVOICE" became a payment for the same reason (GK: 235 of 241 rows).
   if (/debit note|arcm/.test(t)) return 'DEBIT_NOTE';
-  if (/credit note|armn|\bcn\b/.test(t)) return 'CREDIT_NOTE';
+  if (/credit note|invoice cancelled|armn|\bcn\b/.test(t)) return 'CREDIT_NOTE';
+  if (/purchase|local purchases|invoice|\bsales?\b/.test(t)) return 'INVOICE';
+  if (/bank payment|payment|collection|receipt|\brcpt\b|neft|rtgs|imps/.test(t)) return 'PAYMENT';
+  if (refs.length && credit > 0) return 'INVOICE';
+  if (credit > 0) return 'INVOICE';
+  if (debit > 0) return 'PAYMENT';
   return 'OTHER';
+}
+
+/**
+ * A document number standing on its own in some column: letters AND digits,
+ * with the separators bill numbers use. Deliberately refuses a bare serial
+ * ("205" is a Tally voucher counter, not a bill), a date and an amount.
+ */
+function documentRef(text: string): string {
+  for (const token of String(text || '').split(/[|\s,;]+/)) {
+    const t = token.trim().replace(/[.,;:]+$/, '');
+    if (t.length < 5 || t.length > 30) continue;
+    if (!/[A-Za-z]/.test(t) || !/\d/.test(t)) continue;
+    if (!/^[A-Za-z0-9/\-.]+$/.test(t)) continue;
+    if (/^\d{1,2}[-/.][A-Za-z]{3}[-/.]\d{2,4}$/.test(t)) continue;
+    return t.toUpperCase();
+  }
+  return '';
 }
 function buildTxn(partial: Omit<NormalizedTxn, 'id'>): NormalizedTxn { return { id: uuid(), ...partial }; }
 export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTOMER'): ParseResult {
@@ -223,16 +249,33 @@ export function parseExcelFile(filePath: string, sourceSideHint?: 'RDC' | 'CUSTO
   if (!transactions.length) {
     parseTallyColumnarWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog);
   }
+  // SAP line-item statements have one SIGNED amount column instead of a Dr/Cr
+  // pair and name the row's nature with a two-letter document type, so the
+  // generic reader cannot see a ledger in them at all.
+  if (!transactions.length) {
+    parseSapLineItemWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog);
+  }
   if (!transactions.length) {
     parseGenericWorkbook(wb, sourceFile, sourceSideHint === 'RDC' ? 'RDC' : 'CUSTOMER', transactions, balances, parserLog, printedTotals);
   }
   return { transactions, balances, parserLog, printedTotals: (printedTotals.debit || printedTotals.credit) ? printedTotals : undefined };
 }
 function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[], side: 'RDC' | 'CUSTOMER' = 'RDC', creditorLedger = false, totals?: PrintedTotals, seenAcrossSheets?: Map<string, string>) {
+  const firstRowIndex = out.length;
+  let bareBalanceSeen = false;
   for (const row of rows) {
     const docType = String(pick(row, ['Doc Type','Voucher Type']) ?? '');
     const voucherNo = String(pick(row, ['Inv / Receipt Number','Voucher No']) ?? '');
-    const particulars = [pick(row, ['Narration','Particular','Customer Name','Plant Name','Transaction Type']), Object.values(row).find(v => /Opening Balance|Closing Balance/i.test(String(v)))].filter(Boolean).join(' | ');
+    // RDC's debtors export labels its closing row with the bare word "Balance"
+    // (no "Closing"), so the row was read as an ordinary transaction, the
+    // ledger stated no closing balance at all, and the balance was derived from
+    // the rows as 0.00 - which is what the statement then printed as "Balance
+    // As per RDC" (Mosh: the real figure, 19,24,476.46, was sitting in the file).
+    const balanceLabel = Object.values(row).find(v => /^\s*(opening|closing)?\s*balance\s*$/i.test(String(v)) || /Opening Balance|Closing Balance/i.test(String(v)));
+    const particulars = [pick(row, ['Narration','Particular','Customer Name','Plant Name','Transaction Type']), balanceLabel].filter(Boolean).join(' | ');
+    // A bare "Balance" with no date closes the ledger; "Opening"/"Closing" are
+    // handled by the classifier below on the particulars text.
+    const bareBalance = !!balanceLabel && /^\s*balance\s*$/i.test(String(balanceLabel));
     // Invoice date before posting/GL date: it is the date the COUNTERPARTY
     // also books, so date-tolerance matching works (creditor exports post a
     // whole month on one GL date).
@@ -274,6 +317,13 @@ function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out:
       continue;
     }
     const txn = buildTxn({ sourceSide: side, sourceFile, sourceSheet, sourceRow: row.__rowNum__, date, voucherType, voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo || refs[0]), extractedReferences: refs, chequeNo: extractChequeNo([particulars, voucherNo, referenceNo]), particulars: [voucherNo, particulars].filter(Boolean).join(' | '), narration: [voucherNo, particulars].filter(Boolean).join(' | '), debit, credit, signedAmountRdcView: signedFromDebitCredit(side, debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: hasTruncatedReference([particulars, referenceNo]) ? 60 : 90, parserNotes: [], runningBalance: (() => { const cb = pick(row, ['CB','Running Bal','Closing Bal','Balance']); const s = cb instanceof Date ? '' : String(cb ?? '').trim(); return s ? parseAmount(s) : undefined; })() });
+    if (bareBalance && !date) {
+      balances.closing = txn.signedAmountRdcView;
+      bareBalanceSeen = true;
+      balances.closingRows?.push(txn);
+      log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: `Closing balance ${Math.abs(txn.signedAmountRdcView).toFixed(2)} read from the ledger's "Balance" row`, confidence: 90 });
+      continue;
+    }
     if (voucherType === 'OPENING') { balances.opening = txn.signedAmountRdcView; balances.openingRows?.push(txn); continue; }
     if (voucherType === 'CLOSING') { balances.closing = txn.signedAmountRdcView; balances.closingRows?.push(txn); continue; }
     // An annexure repeats rows that already appear in the ledger sheet. Drop a
@@ -286,6 +336,19 @@ function parseRdcRows(rows: Row[], sourceFile: string, sourceSheet: string, out:
       if (!firstSheet) seenAcrossSheets.set(key, sourceSheet);
     }
     out.push(txn);
+  }
+  // The "Balance" row is printed on whichever side squares the ledger, so its
+  // Dr/Cr does not say which way the balance runs. Decide by arithmetic, and
+  // only when the contra reading ties EXACTLY - otherwise an incomplete parse
+  // would be hidden by flipping a sign instead of reported as a gap.
+  if (bareBalanceSeen && balances.closing != null) {
+    const running = out.slice(firstRowIndex).reduce((sum, t) => sum + t.signedAmountRdcView, balances.opening || 0);
+    const asPrinted = Math.abs(running - balances.closing);
+    const asContra = Math.abs(running + balances.closing);
+    if (asContra <= 2 && asPrinted > 2) {
+      log.push({ sourceFile, sourceSheet, level: 'info', message: `The "Balance" row was printed on the contra side; read as ${(-balances.closing).toFixed(2)} - the only sign that satisfies opening + rows = closing`, confidence: 90 });
+      balances.closing = -balances.closing;
+    }
   }
 }
 function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string, out: NormalizedTxn[], balances: ParseResult['balances'], log: ParserLogRow[]) {
@@ -303,9 +366,23 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
       : 'Captured customer opening balance separately', confidence: 90 });
   };
   let parent: Row | undefined;
-  let parentBase: { voucherNo?: string; date?: string; vchType?: string; particulars?: string; debit: number; credit: number } | undefined;
+  let parentBase: { voucherNo?: string; parentKey?: string; date?: string; vchType?: string; particulars?: string; rowText?: string; debit: number; credit: number } | undefined;
   let parentHadChildren = false;
   let parentDetailLines: string[] = [];
+  const firstRowIndex = out.length;
+  // Set when the closing balance came from a label row whose Dr/Cr side does
+  // not say which way the balance runs. Resolved by proof after the loop.
+  let ambiguousClosing = false;
+  // Every cell of a row, for CLASSIFICATION and REFERENCE EXTRACTION only -
+  // never for display. Exports put the bill number and the row's own
+  // description in columns this reader has no name for: "DD" in DSR,
+  // "INVOICE NO" in AGA, a second and third "Particulars" in Pressmatic.
+  // Reading only the columns we recognise made all of them invisible, so 3,218
+  // DSR rows and 504 AGA rows carried no reference at all.
+  const rowText = (row: Row) => Object.entries(row)
+    .filter(([k]) => !/^(debit|credit|dr\.?|cr\.?|amount)$/i.test(k.trim()))
+    .map(([, v]) => (v instanceof Date ? '' : String(v ?? '').trim()))
+    .filter(Boolean).join(' | ');
   const detailText = (row: Row) => [pick(row, ['Particulars','Narration','Bill wise Details']), (row as any).__EMPTY, (row as any).__EMPTY_1, (row as any).__EMPTY_2].filter(Boolean).map(String).join(' | ');
   const balanceAmount = (row: Row) => Math.max(...Object.values(row).map(absAmount));
   const balanceSign = (row: Row) => /by/i.test(String(pick(row, ['Particulars']) || Object.values(row)[1] || '')) ? -1 : 1;
@@ -326,7 +403,9 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
   };
   const addCustomerTxn = (row: Row, base: NonNullable<typeof parentBase>, refText: string, debit: number, credit: number, allocationType: 'New Ref' | 'Agst Ref' | 'Inferred' | '') => {
     const particulars = [base.particulars, String(pick(row, ['Particulars','Narration','Bill wise Details']) ?? ''), refText].filter(Boolean).join(' | ');
-    const refs = extractReferences([particulars, refText, base.voucherNo]);
+    // Classification and reference hunting look at the WHOLE row (see rowText).
+    const searchText = [particulars, refText, base.rowText].filter(Boolean).join(' | ');
+    const refs = extractReferences([searchText, base.voucherNo]);
     // Fallback reference: strip any allocation amount / Dr-Cr tokens that were
     // joined onto the ref text (else "21MU25AR1253 53775 cr" fuses into one blob).
     const fallbackRef = refText
@@ -335,12 +414,27 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
       .replace(/\s+\d[\d,]*(?:\.\d{1,2})?\s*(?:dr|cr)?\s*$/i, '')
       .replace(/\s+(?:dr|cr)\s*$/i, '')
       .trim();
-    const referenceNo = refs[0] || fallbackRef;
-    const voucherType = classifyCustomer(base.vchType || '', particulars, debit, credit, refs);
+    // The counterparty's own bill number is a perfectly good match key even
+    // when it is not shaped like an RDC reference - both ledgers print it
+    // (GK: "GKE/23-24/328" on both sides, and not one row matched on it).
+    const referenceNo = refs[0] || fallbackRef || documentRef(base.voucherNo || '') || documentRef(base.rowText || '');
+    // On an allocation CHILD the reference names the document being settled,
+    // not the kind of row this is: a payment applied against credit note
+    // 22MU25ARMN35 is still part of that payment. When the parent voucher is
+    // explicitly cash, the child inherits it and its reference is ignored for
+    // typing - otherwise six of Talib's PYT/40616 allocations became credit
+    // notes, the voucher totalled 16,41,933 instead of 19,68,719, and neither
+    // side could match a cheque both ledgers had recorded.
+    const isAllocationChild = allocationType === 'New Ref' || allocationType === 'Agst Ref';
+    const parentIsCash = /payment|receipt|contra/i.test(base.vchType || '');
+    const voucherType = isAllocationChild && parentIsCash
+      ? classifyCustomer(base.vchType || '', [base.particulars, base.vchType].filter(Boolean).join(' | '), debit, credit, [])
+      : classifyCustomer(base.vchType || '', searchText, debit, credit, refs);
     const notes: string[] = /journal|\bjv\b/i.test(base.vchType || '') ? ['SOURCE_VOUCHER_TYPE_JOURNAL'] : [];
     let confidence = refs.length ? 88 : 78;
+    if (!refs.length && referenceNo) confidence = 84;
     if (hasTruncatedReference([particulars, refText])) { confidence = 55; notes.push('LOW_PARSE_CONFIDENCE_REFERENCE_NOT_EXTRACTED'); }
-    const txn = buildTxn({ sourceSide: 'CUSTOMER', sourceFile, sourceSheet, sourceRow: row.__rowNum__, date: base.date, voucherType, voucherNo: base.voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo), extractedReferences: refs, parentVoucherNo: allocationType ? base.voucherNo : undefined, chequeNo: extractChequeNo([particulars, base.voucherNo]), allocationType, particulars, narration: particulars, debit, credit, signedAmountRdcView: signedFromDebitCredit('CUSTOMER', debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: confidence, parserNotes: notes });
+    const txn = buildTxn({ sourceSide: 'CUSTOMER', sourceFile, sourceSheet, sourceRow: row.__rowNum__, date: base.date, voucherType, voucherNo: base.voucherNo, referenceNo, normalizedReferenceNo: normalizeReference(referenceNo), extractedReferences: refs, parentVoucherNo: allocationType ? (base.parentKey || base.voucherNo) : undefined, chequeNo: extractChequeNo([particulars, base.voucherNo]), allocationType, particulars, narration: particulars, debit, credit, signedAmountRdcView: signedFromDebitCredit('CUSTOMER', debit, credit), amountOriginalSign: debit ? 'Dr' : credit ? 'Cr' : '', parseConfidence: confidence, parserNotes: notes });
     if (voucherType === 'OPENING') { addOpening(txn.signedAmountRdcView, row.__rowNum__); balances.openingRows?.push(txn); return; }
     if (voucherType === 'CLOSING') { balances.closing = txn.signedAmountRdcView; balances.closingRows?.push(txn); return; }
     // Zero-amount rows (informational sub-allocations) contribute nothing and
@@ -359,24 +453,36 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
     const vchNo = String(pick(row, ['Vch No','Voucher No']) ?? '');
     const debit = absAmount(pick(row, ['Debit','Dr']));
     const credit = absAmount(pick(row, ['Credit','Cr']));
+    const line = Object.values(row).join(' | ');
+    // Balance rows are recognised BEFORE the dated-voucher branch, because
+    // Tally prints them WITH a date and the label often sits in a column this
+    // reader has no name for. Caught by the dated branch instead, Pressmatic's
+    // opening balance became an ordinary "Other entry" of 12,61,263.97, the
+    // ledger lost its opening entirely, and the statement led with a phantom
+    // 14,84,245.13 opening difference.
+    if (/open(ing)?\s*bal/i.test(line)) {
+      flushParent();
+      addOpening(balanceAmount(row) * balanceSign(row), row.__rowNum__);
+      continue;
+    }
+    if (/clos(ing)?\s*bal/i.test(line)) {
+      flushParent();
+      balances.closing = balanceAmount(row) * balanceSign(row);
+      ambiguousClosing = true;
+      log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: 'Captured customer closing balance separately', confidence: 90 });
+      continue;
+    }
     if (date) {
       flushParent();
       lastDate = date;
       parent = row;
       parentHadChildren = false;
-      parentBase = { voucherNo: vchNo, date, vchType, particulars, debit, credit };
-      continue;
-    }
-    const line = Object.values(row).join(' | ');
-    if (/opening balance/i.test(line)) {
-      flushParent();
-      addOpening(balanceAmount(row) * balanceSign(row), row.__rowNum__);
-      continue;
-    }
-    if (/closing balance/i.test(line)) {
-      flushParent();
-      balances.closing = balanceAmount(row) * balanceSign(row);
-      log.push({ sourceFile, sourceSheet, sourceRow: row.__rowNum__, level: 'info', message: 'Captured customer closing balance separately', confidence: 90 });
+      // Not every Tally print numbers its vouchers. Without a key the payment's
+      // allocation children cannot be grouped back into the cheque that RDC
+      // received, so each fragment faced the receipt alone and none matched
+      // (Honeybird: 245 allocations against 53 receipts, the same 92.9 lakh
+      // reported as missing on both sides). The source row is a stable key.
+      parentBase = { voucherNo: vchNo, parentKey: vchNo || `#row${row.__rowNum__}`, date, vchType, particulars, rowText: rowText(row), debit, credit };
       continue;
     }
     if (/total/i.test(line) && Object.values(row).some(v => absAmount(v) > 0)) {
@@ -431,7 +537,7 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
       flushParent();
       parent = row;
       parentHadChildren = false;
-      parentBase = { voucherNo: vchNo, date: lastDate, vchType, particulars, debit, credit };
+      parentBase = { voucherNo: vchNo, parentKey: vchNo || `#row${row.__rowNum__}`, date: lastDate, vchType, particulars, rowText: rowText(row), debit, credit };
       continue;
     }
     if (parentBase) {
@@ -440,5 +546,21 @@ function parseCustomerRows(rows: Row[], sourceFile: string, sourceSheet: string,
     }
   }
   flushParent();
+  // A "Closing Balance" row's Dr/Cr side is ambiguous: Tally squares the ledger
+  // by printing the balance on the CONTRA side, so a debit balance appears in
+  // the Credit column. Taken at face value GK's closing came out +1,67,49,392.76
+  // instead of -1,67,49,392.76, and the ledger reported an integrity gap of
+  // exactly twice that - 3.35 crore of "rows not captured" that were all there.
+  // Decided by arithmetic, and only when the contra reading ties EXACTLY, so an
+  // incomplete parse still surfaces as a gap instead of being papered over.
+  if (ambiguousClosing && balances.closing != null) {
+    const running = out.slice(firstRowIndex).reduce((sum, t) => sum + t.signedAmountRdcView, balances.opening || 0);
+    const asPrinted = Math.abs(running - balances.closing);
+    const asContra = Math.abs(running + balances.closing);
+    if (asContra <= 2 && asPrinted > 2) {
+      log.push({ sourceFile, sourceSheet, level: 'info', message: `Closing balance ${balances.closing.toFixed(2)} was printed on the contra side (Tally convention); read as ${(-balances.closing).toFixed(2)} - the only sign that satisfies opening + rows = closing`, confidence: 90 });
+      balances.closing = -balances.closing;
+    }
+  }
   log.push({ sourceFile, sourceSheet, level: 'info', message: 'Parsed Tally/customer rows with parent-child allocation protection', confidence: 85 });
 }

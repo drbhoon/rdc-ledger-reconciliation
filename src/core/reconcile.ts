@@ -238,14 +238,15 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     }
     return refBest || colBest || best;
   };
-  for (const r of rdcInPeriod) {
+  const matchRdcRow = (r: NormalizedTxn) => {
+    if (usedRdc.has(r.id)) return;
     // Credit notes are often booked by customers as (negative) purchases or
     // journals, so let invoice-side matching span both buckets.
     const types = invoiceTypes.includes(r.voucherType) ? [...invoiceTypes, ...creditTypes]
       : tdsTypes.includes(r.voucherType) ? tdsTypes
       : paymentTypes.includes(r.voucherType) ? paymentTypes
       : creditTypes.includes(r.voucherType) ? [...creditTypes, ...invoiceTypes] : [];
-    if (!types.length) continue;
+    if (!types.length) return;
     const found = tryMatch(r, customerInPeriod, types, paymentTypes.includes(r.voucherType) ? options.paymentDateToleranceDays : options.invoiceDateToleranceDays, paymentTypes.includes(r.voucherType) ? options.paymentTolerance : options.invoiceTolerance);
     if (found && found.confidence >= 75) {
       usedRdc.add(r.id); usedCust.add(found.txn.id);
@@ -253,6 +254,17 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     } else if (found) {
       possibleMatches.push(matchRow({ matchStatus: 'POSSIBLE', reasonCode: 'POSSIBLE_MATCH_REVIEW_REQUIRED', rdcTxn: r, customerTxn: found.txn, rdcAmount: r.signedAmountRdcView, customerAmount: found.txn.signedAmountRdcView, difference: r.signedAmountRdcView - found.txn.signedAmountRdcView, confidence: found.confidence, remarks: found.reason }));
     }
+  };
+  // Invoices, notes and TDS first. RDC's RECEIPTS are deliberately held back
+  // until after the grouped-payment pass below: a customer payment voucher is
+  // one cheque split across dozens of allocation children, and letting other
+  // RDC receipts pick those children off one at a time leaves the voucher with
+  // a part-total that matches nothing. Talib's PYT/40616 is the case in point -
+  // 19,68,719 paid, 19,68,719 received, both sides reported as unbooked
+  // because 3,26,786 of the children had already been claimed elsewhere.
+  for (const r of rdcInPeriod) {
+    if (paymentTypes.includes(r.voucherType)) continue;
+    matchRdcRow(r);
   }
   // ── RDC-side receipt reversals ──────────────────────────────────────────
   // A REC that bounced is reversed by a REV on the same voucher; the pair nets
@@ -431,6 +443,12 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
     ].filter(Boolean).join('; ');
   }
 
+  // Whole vouchers have had their chance; now the leftover RDC receipts may
+  // match individual customer payment rows.
+  for (const r of rdcInPeriod) {
+    if (paymentTypes.includes(r.voucherType)) matchRdcRow(r);
+  }
+
   // A pair the invoice pass could only flag as "possible" may since have been
   // PROPERLY matched by the grouped payment pass — drop those stale review
   // flags, they were pure noise on the Possible_Matches sheet (Dalmia: 126
@@ -598,9 +616,22 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   const rdcTied = rdcGap == null || Math.abs(rdcGap) <= 1;
   const custTied = custGap == null || Math.abs(custGap) <= 1;
   const explained = Math.abs(unexplained) <= 1;
-  const rdcVolume = rdc.transactions.reduce((s, t) => s + Math.abs(t.signedAmountRdcView), 0);
+  // Coverage answers "how much of the comparable ledger tied up", so the
+  // denominator must exclude RDC history the counterparty never sent. MVR's
+  // RDC export runs from Jan-2023 while the customer's extract starts Apr-2025
+  // with a 2 crore opening balance that already contains those years: about
+  // 4,000 of 4,869 RDC rows cannot match by construction, and reporting that
+  // as 18% read as a failure when the reconciliation itself closed at zero.
+  const customerDates = activeCustomer.map(t => t.date).filter(Boolean).sort();
+  const customerStart = customerDates[0];
+  const comparableRdc = customerStart ? rdc.transactions.filter(t => !t.date || t.date >= customerStart) : rdc.transactions;
+  const excludedBefore = rdc.transactions.length - comparableRdc.length;
+  const rdcVolume = comparableRdc.reduce((s, t) => s + Math.abs(t.signedAmountRdcView), 0);
   const matchedVolume = matches.reduce((s, m) => s + Math.abs(m.rdcAmount || 0), 0);
-  const matchedCoveragePct = rdcVolume > 0 ? Math.round((matchedVolume / rdcVolume) * 10000) / 100 : 0;
+  const matchedCoveragePct = rdcVolume > 0 ? Math.min(100, Math.round((matchedVolume / rdcVolume) * 10000) / 100) : 0;
+  if (excludedBefore > 0) {
+    rdc.parserLog.push({ sourceFile: rdc.transactions[0]?.sourceFile || 'rdc', level: 'info', message: `Coverage is measured from ${customerStart}, where the counterparty's ledger begins: ${excludedBefore} earlier RDC row(s) predate it and are represented by the counterparty's opening balance, not by matchable entries.`, confidence: 85 });
+  }
   // Zero matches across two populated ledgers is a parsing/orientation
   // failure, not a finished reconciliation — it can still be arithmetically
   // self-consistent (everything dumped into Add/Less buckets), so it must be
@@ -616,7 +647,29 @@ export function reconcile(rdc: ParseResult, customer: ParseResult, options: Reco
   // A ledger whose rows fail their own arithmetic cannot support a certified
   // reconciliation, however well the totals happen to tie.
   const auditFailed = [rdc.audit, customer.audit].some(a => a?.verdict === 'FAIL');
-  const certified = rdcTied && custTied && explained && !nothingMatched && !auditFailed && !emptyLedger;
+  // "Tied" is only meaningful against a stated balance. When NEITHER ledger
+  // prints one, both gaps come back null - which reads as two passes and used
+  // to certify a run that had proved nothing at all.
+  //
+  // There are two ways a reading can be proved: the documents check it, or the
+  // matching does. So this blocks only when the documents cannot AND the match
+  // is weak. A ledger pair that states no balance anywhere but ties up 92% of
+  // its volume invoice by invoice has demonstrated itself (Mosh, whose figures
+  // the accounts team reconciled by hand to the rupee); one that states no
+  // balance and matches a third of its volume has demonstrated nothing.
+  const unverifiableFromDocuments = rdcGap == null && custGap == null;
+  const nothingToVerify = unverifiableFromDocuments && matchedCoveragePct < 50;
+  if (unverifiableFromDocuments) {
+    customer.parserLog.push({
+      sourceFile: customer.transactions[0]?.sourceFile || 'customer',
+      level: nothingToVerify ? 'error' : 'warn',
+      message: nothingToVerify
+        ? 'Certification blocked: neither ledger states an opening or closing balance, so no reading could be checked against the documents themselves, and too little matched for the matching to stand in as evidence. The figures below may be complete — nothing here proves it.'
+        : `Neither ledger states an opening or closing balance, so the readings could not be checked against the documents. ${matchedCoveragePct}% of the RDC volume matched line by line, which is the evidence this run rests on — spot-check a few lines before sending it out.`,
+      confidence: nothingToVerify ? 0 : 55,
+    });
+  }
+  const certified = rdcTied && custTied && explained && !nothingMatched && !auditFailed && !emptyLedger && !nothingToVerify;
   const verdict = certified ? 'CERTIFIED' : 'REVIEW REQUIRED';
   if (emptyLedger) {
     const side = rdc.transactions.length === 0 ? 'RDC' : 'customer';

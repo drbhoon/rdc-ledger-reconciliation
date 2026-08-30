@@ -70,7 +70,11 @@ export async function parsePdfFile(filePath: string, sourceSide: PdfSide = 'CUST
   const sourceFile = filePath.split(/[\\/]/).pop() || filePath;
   const buffer = fs.readFileSync(filePath);
   const data = await pdf(buffer);
-  const parserLog: ParseResult['parserLog'] = [{ sourceFile, level: 'info', message: 'PDF text extraction completed', confidence: data.text.trim() ? 80 : 20 }];
+  // The character count matters downstream: "this PDF is a scan" and "this PDF
+  // has text we could not lay out" call for completely different advice, and
+  // telling somebody their readable 43,615-character PDF was a photograph sent
+  // a whole team looking for a scanner problem that did not exist.
+  const parserLog: ParseResult['parserLog'] = [{ sourceFile, level: 'info', message: `PDF text extraction completed (${data.text.trim().length} characters of text)`, confidence: data.text.trim() ? 80 : 20 }];
   const lines = String(data.text || '').split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
   // Column-safe text used by the structured (compact / FIN002) parsers.
   let spacedLines: string[] = [];
@@ -94,6 +98,13 @@ export async function parsePdfFile(filePath: string, sourceSide: PdfSide = 'CUST
   // prints for itself. Several Tally prints share this header while laying the
   // body out differently, and a plausible-looking wrong parse is the worst
   // outcome — so the adapter has to prove itself before it is used.
+  // A parse the acceptance gate turned down is still evidence. If nothing else
+  // reads the file it is far better to hand back those rows with a LOUD
+  // integrity gap than to report the document as unreadable: AVK's PDF holds
+  // 43,615 characters of text and 270 readable rows, and the accounts team was
+  // told it was a scan.
+  let rejectedLedgerAccount: ParseResult | undefined;
+  let rejectedGap = 0;
   const ledgerAccount = parseTallyLedgerAccountPdf(spacedLines.length ? spacedLines : lines, sourceFile, sourceSide);
   if (ledgerAccount.transactions.length && ledgerAccount.printedTotals) {
     const debitSum = ledgerAccount.transactions.reduce((s, t) => s + Math.abs(t.debit || 0), 0);
@@ -105,6 +116,8 @@ export async function parsePdfFile(filePath: string, sourceSide: PdfSide = 'CUST
       return ledgerAccount;
     }
     parserLog.push({ sourceFile, level: 'info', message: `Tally Ledger Account adapter rejected: its ${ledgerAccount.transactions.length} rows do not reproduce the printed totals (Dr ${debitSum.toFixed(2)} vs ${(ledgerAccount.printedTotals.debit ?? 0).toFixed(2)}); trying the other layouts`, confidence: 60 });
+    rejectedLedgerAccount = ledgerAccount;
+    rejectedGap = Math.abs(debitSum - (ledgerAccount.printedTotals.debit ?? 0));
   }
   const compact = parseCompactPdfLedger(spacedLines.length ? spacedLines : lines, sourceFile, sourceSide);
   if (compact.transactions.length || compact.balances.opening || compact.balances.closing) {
@@ -123,6 +136,11 @@ export async function parsePdfFile(filePath: string, sourceSide: PdfSide = 'CUST
     return running;
   }
   const tally = parseTallyPdfLedger(lines, sourceFile, sourceSide);
+  if (rejectedLedgerAccount && rejectedLedgerAccount.transactions.length > tally.transactions.length) {
+    rejectedLedgerAccount.parserLog.unshift(...parserLog);
+    rejectedLedgerAccount.parserLog.push({ sourceFile, level: 'error', message: `No other layout read this file, so the ${rejectedLedgerAccount.transactions.length} rows the Ledger Account adapter did read are used — but they differ from the totals the statement prints for itself by ${rejectedGap.toFixed(2)}. Treat this reconciliation as INCOMPLETE and check the Parse_Audit sheet.`, confidence: 40 });
+    return rejectedLedgerAccount;
+  }
   if (tally.transactions.length || tally.balances.opening || tally.balances.closing) {
     tally.parserLog.unshift(...parserLog);
     return tally;
@@ -334,13 +352,21 @@ function parseTallyLedgerAccountPdf(lines: string[], sourceFile: string, sourceS
     const debit = sign === 'Dr' ? amount : 0;
     const credit = sign === 'Cr' ? amount : 0;
     if (amount > 0) {
-      const referenceNo = refs[0] || '';
+      // Not every Tally build labels the allocation "New Ref"/"Agst Ref". AVK's
+      // print carries the bill number in the voucher's own narration instead
+      // ("Agst Bill No-4KL24BP1-880, Bill Dated-29.07.2024"), so when the
+      // allocation lines yield nothing, read the narration - it is the same
+      // information, and without it 245 rows went out with no reference and
+      // were classified as bare journal adjustments.
+      const allRefs = refs.length ? refs : extractReferences([particulars, ...narration]);
+      const detail = [particulars, ...narration].filter(Boolean).join(' | ');
+      const referenceNo = allRefs[0] || '';
       transactions.push(makePdfTxn({
         sourceSide, sourceFile, sourceRow: pending.row,
-        date, voucherType: tallyVoucherType(vchType, particulars, sign === 'Dr' ? 'DR' : 'CR', refs),
+        date, voucherType: tallyVoucherType(vchType, detail, sign === 'Dr' ? 'DR' : 'CR', allRefs),
         voucherNo: vchNo, referenceNo,
         normalizedReferenceNo: normalizeReference(referenceNo),
-        extractedReferences: refs,
+        extractedReferences: allRefs,
         chequeNo: extractChequeNo([particulars, ...narration]),
         particulars: [particulars, ...narration].filter(Boolean).join(' | ').slice(0, 200),
         narration: [particulars, ...narration, ...refs].filter(Boolean).join(' | ').slice(0, 400),
@@ -377,9 +403,18 @@ function parseTallyLedgerAccountPdf(lines: string[], sourceFile: string, sourceS
       // Tally prints another equal-sided grand-total line after the closing
       // balance. It includes that balance and is not the transaction total.
       // The first pair, immediately before closing, is the auditable row total.
-      if (printedTotals.debit == null && printedTotals.credit == null) {
-        printedTotals.debit = parseAmount(totals[1]);
-        printedTotals.credit = parseAmount(totals[2]);
+      // A print covering several financial years repeats the whole structure
+      // per year, so each block's transaction total is ADDED (AVK spans
+      // 1-Apr-24 to 31-Mar-26 and prints two of them; taking only the first
+      // measured a two-year parse against one year's figures and threw a good
+      // 270-row read away).
+      const blockDebit = parseAmount(totals[1]);
+      const blockCredit = parseAmount(totals[2]);
+      const isGrandTotal = closingSeen && Math.abs(blockDebit - blockCredit) <= 1;
+      if (!isGrandTotal) {
+        printedTotals.debit = (printedTotals.debit ?? 0) + blockDebit;
+        printedTotals.credit = (printedTotals.credit ?? 0) + blockCredit;
+        closingSeen = false;
       }
       continue;
     }

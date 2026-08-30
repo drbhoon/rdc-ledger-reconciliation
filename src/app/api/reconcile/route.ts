@@ -127,12 +127,18 @@ export async function POST(req: Request) {
       // sent two teams looking for a scanner problem that did not exist
       // (SPJ Properties and UltraTech were both spreadsheets).
       const isPdf = /\.pdf$/i.test(customerFile.name);
+      // Only call it a scan if it really has no text layer.
+      const chars = Number(customer.parserLog.map(l => l.message.match(/\((\d+) characters of text\)/)).find(Boolean)?.[1] ?? 0);
+      const hasTextLayer = chars > 200;
       return new NextResponse(
         `Could not read any transactions from the customer ledger "${customerFile.name}".` +
         (aiConfig.enabled ? ' AI text and image rescue were both attempted and failed.' : ' AI rescue is disabled (set AI_ENABLED=true).') +
         (isPdf
-          ? ' This usually means the PDF holds no readable text layer — a scan, a photo, or a print-to-PDF whose text is drawn as outlines.' +
-            ' The reliable fix is the customer ledger as Excel/CSV (or a Tally export).'
+          ? (hasTextLayer
+            ? ` The PDF is NOT a scan — ${chars.toLocaleString('en-IN')} characters of text were read from it — but its table layout is one no parser here recognises yet.` +
+              ' Please send this file to support: that is fixed by teaching the parser. A Tally or Excel export of the same ledger will work in the meantime.'
+            : ' The PDF holds no readable text layer — a scan, a photo, or a print-to-PDF whose text is drawn as outlines.' +
+              ' The reliable fix is the customer ledger as Excel/CSV (or a Tally export).')
           : ' The file opened, but no ledger table could be found in it — check that the sheet holds the ledger itself (a date column with debit/credit or amount columns)' +
             ' rather than a summary, a pivot or a covering page, and that the export is not password-protected or filtered.' +
             ' Please send this file to support: an unrecognised layout is fixed by teaching the parser, not by re-exporting.') +

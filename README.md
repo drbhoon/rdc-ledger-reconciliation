@@ -25,10 +25,15 @@ Three rules the code is held to, agreed after the first rounds of testing:
 - **RDC exports:** debtors and creditors (payable) layouts, Excel / CSV / PDF.
 - **Customer ledgers:** the mirror of the RDC layout; Tally parent-child allocations,
   columnar registers and "Ledger Account" prints; the Tally *columnar* print, which has
-  no debit/credit pair at all and one money column per contra account; ERP exports that
+  no debit/credit pair at all and one money column per contra account; SAP line-item
+  statements (one signed amount column, two-letter document types); ERP exports that
   split one voucher across several account rows; customer-maintained invoice registers
   where one row carries both an invoice and a payment; SAP and AP statements of account
   keyed only on a document number.
+- **Columns are read by content, not only by name.** A bill number in a column headed
+  "DD", "INVOICE NO" or nothing at all is still a bill number; an opening balance is
+  recognised wherever its label sits. Where two columns compete to be *the* reference,
+  both are carried and matching tries each rather than guessing.
 - **Matching:** exact reference, truncated reference, near-identical reference (as a
   second pass, so it can never steal a row that has an exact partner), grouped
   payments by allocation or cheque, short receipts, and cancelled-invoice netting.

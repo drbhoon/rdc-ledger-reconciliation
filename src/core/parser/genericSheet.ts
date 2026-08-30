@@ -36,7 +36,7 @@ const ROLE_PATTERNS: Array<{ role: Role; re: RegExp; priority: number }> = [
   { role: 'docType', re: /doc\.?\s*type|vch type|voucher type|^type$/i, priority: 0 },
   { role: 'docNo', re: /doc(?:ument)?\.?\s*(?:no|num(?:ber)?)\b|voucher no\.?$|vch no/i, priority: 0 },
   { role: 'reference', re: /gst inv/i, priority: 0 },
-  { role: 'reference', re: /(voucher\s*)?ref\.?\s*(no|number)|inv(oice)?\s*no|inv(oice)?\s*number|bill no|reference/i, priority: 1 },
+  { role: 'reference', re: /(voucher\s*)?ref\.?\s*(no|number|#)|inv(oice)?\s*no|inv(oice)?\s*number|bill\s*no|reference/i, priority: 1 },
   { role: 'narration', re: /particular|narration|description|remarks/i, priority: 0 },
   // The contra-account column names the OTHER side of the voucher ("Sales",
   // "NEFT-RDC CONCRETE") and is what says whether a row is a bill or a
@@ -93,6 +93,29 @@ function mapHeader(cells: string[]): { cols: Partial<Record<Role, number>>; cand
  * identifies the transaction (UltraTech: col 1 is "610926R101" on all 70 rows,
  * col 2 carries the invoice number RDC's own ledger prints).
  */
+/**
+ * A statement can carry the counterparty's OWN reference and RDC's side by
+ * side under the same header. SRR prints two "Ref. #" columns: its internal
+ * "SRRP/P004/MATIV/20/01/02/0001" and, next to it, RDC's "2HY19/AR-SI8052".
+ * Only the second is a match key, and "which column varies most" cannot tell
+ * them apart - so ask which column actually holds RDC references.
+ */
+function preferRdcReferenceColumn(matrix: unknown[][], headerIdx: number, candidates: number[] | undefined) {
+  if (!candidates || candidates.length < 2) return undefined;
+  let bestCol: number | undefined, bestHits = 0;
+  for (const col of candidates) {
+    let hits = 0, seen = 0;
+    for (let i = headerIdx + 1; i < Math.min(matrix.length, headerIdx + 200); i++) {
+      const v = String((matrix[i] as unknown[])?.[col] ?? '').trim();
+      if (!v) continue;
+      seen += 1;
+      if (extractReferences([v]).length) hits += 1;
+    }
+    if (seen && hits > bestHits) { bestHits = hits; bestCol = col; }
+  }
+  return bestHits > 0 ? bestCol : undefined;
+}
+
 function preferVaryingColumn(matrix: unknown[][], headerIdx: number, candidates: number[] | undefined, current: number | undefined) {
   if (!candidates || candidates.length < 2) return current;
   let bestCol = current, bestDistinct = -1;
@@ -162,6 +185,11 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
   let ambiguousClosing = false;
   // Number of opening-balance rows seen, so per-site sections accumulate.
   let openingBlocks = 0;
+  // Money rows with no date: kept aside until the closing balance says whether
+  // they are real entries or an unlabelled totals line (see the end of the loop).
+  const datelessRows: NormalizedTxn[] = [];
+  let lastDate: string | undefined;
+  let altRefCols: number[] = [];
 
   for (const sheetName of wb.SheetNames) {
     if (onlySheets && !onlySheets.has(sheetName)) continue;
@@ -175,9 +203,17 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
       cols = mapped.cols;
       headerIdx = i;
       for (const role of ['docNo', 'reference'] as const) {
-        const picked = preferVaryingColumn(matrix as unknown[][], i, mapped.candidates[role], cols[role]);
+        const picked = preferRdcReferenceColumn(matrix as unknown[][], i, mapped.candidates[role])
+          ?? preferVaryingColumn(matrix as unknown[][], i, mapped.candidates[role], cols[role]);
         if (picked != null) cols[role] = picked;
       }
+      // A statement can print the counterparty's own reference and RDC's side
+      // by side under the same header (SRR has two "Ref. #" columns: its
+      // internal SRRP/... and RDC's 2HY19/AR-SI8052). Nothing inside one file
+      // says which is which, so every candidate is carried as an alternative
+      // reference and matching tries them all rather than guessing.
+      altRefCols = [...(mapped.candidates.reference || []), ...(mapped.candidates.docNo || [])]
+        .filter(c => c !== mapped.cols.reference && c !== mapped.cols.docNo);
       break;
     }
     if (!cols || headerIdx < 0) {
@@ -259,7 +295,10 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
         if (!columnar && !balCell) ambiguousClosing = true;
         continue;
       }
-      if (/grand total|total of|period total|\btotal\b/i.test(allText) && !date) {
+      // "TOTALS" (plural) is a totals row as much as "Total" is, and \btotal\b
+      // does not match it - so SRR's totals line was read as a transaction and
+      // then confused the dateless-row test below.
+      if (/grand total|total of|period total|\btotals?\b/i.test(allText) && !date) {
         // Printed Dr/Cr totals are evidence for the parse audit.
         if (totals && !totals.debit && !totals.credit && !columnar && (debit || credit)) { totals.debit = debit; totals.credit = credit; totals.sheet = sheetName; }
         continue;
@@ -268,7 +307,14 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
       // A columnar register's column total includes every money row, even one
       // with no date (Suroj had a stray −₹37). Dropping it would leave an
       // unexplainable integrity gap, so keep it and flag the missing date.
-      if (!date && !columnar) continue;
+      // A dateless row in a Dr/Cr ledger is ambiguous: it can be the next
+      // voucher of the same day printed without its date, or an unlabelled
+      // totals line. Both look identical - SRR's four are bare amounts in an
+      // otherwise empty row, and so is Dalmia Chennai's total. So collect them
+      // and let the ledger's own closing balance decide (see below); dropping
+      // them outright cost SRR 7,30,000, which then reappeared as a phantom
+      // opening-balance difference.
+      const datelessCandidate = !date && !columnar;
 
       const docType = cell(row, 'docType');
       const docNo = cell(row, 'docNo');
@@ -280,6 +326,7 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
       const firstSheet = seen.get(key);
       if (firstSheet && firstSheet !== sheetName) { duplicates += 1; continue; }
       if (!firstSheet) seen.set(key, sheetName);
+      const target = datelessCandidate ? datelessRows : out;
       const voucherType = classifyGeneric(side, docType, narration + ' ' + reference, debit, credit);
       const refs = extractReferences([reference, narration]);
       // extractReferences only knows RDC's OWN invoice shapes. In an AP/AR
@@ -290,11 +337,15 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
       // document number, so require something identifier-shaped.
       const docNoIsIdentifier = /[A-Za-z]/.test(docNo) || /^\d{6,}$/.test(docNo.replace(/[\s,]/g, ''));
       const referenceNo = reference || refs[0] || (docNoIsIdentifier ? docNo : '');
-      out.push({
+      // Normalised, because that is the form the matcher compares.
+      const alternates = altRefCols
+        .map(c => normalizeReference(String((row as unknown[])[c] ?? '').trim()))
+        .filter(v => v.length >= 4);
+      target.push({
         id: uuid(), sourceSide: side, sourceFile, sourceSheet: sheetName, sourceRow: i + 1,
-        date, voucherType, voucherNo, referenceNo,
+        date: date || lastDate, voucherType, voucherNo, referenceNo,
         normalizedReferenceNo: normalizeReference(referenceNo),
-        extractedReferences: refs.length ? refs : (referenceNo ? [referenceNo] : []),
+        extractedReferences: Array.from(new Set([...refs, ...(referenceNo ? [normalizeReference(referenceNo)] : []), ...alternates])).filter(Boolean),
         chequeNo: extractChequeNo([narration, voucherNo]),
         allocationType: 'Inferred',
         particulars: [docType, narration].filter(Boolean).join(' | ').slice(0, 200),
@@ -306,10 +357,29 @@ export function parseGenericWorkbook(wb: XLSX.WorkBook, sourceFile: string, side
         parserNotes: ['Generic layout adapter', ...(date ? [] : ['Source row has no date'])],
         runningBalance: cell(row, 'balance') ? balSign * parseAmount(cell(row, 'balance')) : undefined,
       });
+      if (date) lastDate = date;
       const balCell = cell(row, 'balance');
       if (balCell && date && (!latestBalance || date >= latestBalance.date)) {
         latestBalance = { date, value: balSign * parseAmount(balCell) };
       }
+    }
+  }
+  // Include the dateless money rows only if doing so makes the ledger tie to
+  // the closing balance it prints for itself. That is the only evidence that
+  // separates a continuation row from a totals line, and it is decisive: SRR
+  // goes from a 7,30,000 gap to zero, while an unlabelled total would double
+  // the ledger and is left out.
+  if (datelessRows.length) {
+    const settled = out.reduce((sum, t) => sum + t.signedAmountRdcView, balances.opening || 0);
+    const extra = datelessRows.reduce((sum, t) => sum + t.signedAmountRdcView, 0);
+    const closing = balances.closing;
+    const without = closing == null ? undefined : Math.abs(settled - closing);
+    const withThem = closing == null ? undefined : Math.abs(settled + extra - closing);
+    if (without != null && withThem != null && withThem <= 2 && without > 2) {
+      for (const t of datelessRows) { t.parserNotes = [...(t.parserNotes || []), 'Source row has no date; taken as the previous date']; out.push(t); }
+      log.push({ sourceFile, level: 'info', message: `${datelessRows.length} row(s) printed without a date are real entries worth ${extra.toFixed(2)}: including them is what makes the ledger tie to its stated closing balance`, confidence: 85 });
+    } else {
+      log.push({ sourceFile, level: 'info', message: `Skipped ${datelessRows.length} dateless amount row(s) totalling ${extra.toFixed(2)} — they do not help the ledger tie to its closing balance, so they are read as unlabelled totals`, confidence: 80 });
     }
   }
   // Resolve an ambiguous closing-balance side by proof rather than by

@@ -42,6 +42,11 @@ the result can be trusted.
 - the statement explains the whole difference between the two balances;
 - something actually matched.
 
+Where a file states **no** opening or closing balance at all, there is nothing to check
+the reading against. The run can still be certified — but only when the matching is
+strong enough to stand as evidence on its own, and the certificate says so. If neither
+the documents nor the matching prove the reading, the run is **REVIEW REQUIRED**.
+
 **REVIEW REQUIRED** means one of those failed. The reason is on the certificate, and
 the detail is in **Parse_Audit**. Do not send a REVIEW REQUIRED reconciliation to a
 customer without reading that sheet.
@@ -54,7 +59,7 @@ The certificate also shows the AI cost of the run. Most runs use no AI at all.
 
 | Sheet | What it is |
 |---|---|
-| **Reconciliation_Certificate** | Trust it or not, and why |
+| **Reconciliation_Certificate** | Trust it or not, and why. **Coverage %** is measured from the date the counterparty's ledger begins — RDC history older than their extract is represented by their opening balance, not by matchable rows |
 | **Parse_Audit** | Every row the app read that disagrees with the ledger's own arithmetic. Empty is good |
 | **Summary_Reco_Statement** | The reconciliation statement itself |
 | **Matched_Invoices / Matched_Receipts** | What tied up, with any difference per pair |

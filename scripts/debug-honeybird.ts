@@ -1,0 +1,21 @@
+import path from 'path';
+import { parseLedger } from '../src/core/parser';
+import { reconcile } from '../src/core/reconcile';
+const D = path.join(process.cwd(), 'test-data-300826-nitesh');
+(async () => {
+  const rdc = await parseLedger(path.join(D, 'Honeybird RDC Ledger.xlsx'), 'RDC');
+  const cust = await parseLedger(path.join(D, 'Honeybird Client Ledger.xlsx'), 'CUSTOMER');
+  const pays = cust.transactions.filter(t => t.voucherType === 'PAYMENT');
+  const withParent = pays.filter(t => t.parentVoucherNo);
+  console.log(`customer payments=${pays.length} withParentVoucherNo=${withParent.length} withCheque=${pays.filter(t=>t.chequeNo).length}`);
+  console.log('sample payments:');
+  for (const t of pays.slice(0, 4)) console.log(`  vno="${t.voucherNo}" parent="${t.parentVoucherNo}" alloc="${t.allocationType}" ref="${t.referenceNo}" amt=${t.signedAmountRdcView}`);
+  const r = reconcile(rdc, cust, { partyName: 'Honeybird', periodStart: '2015-04-01', periodEnd: '2026-12-31', invoiceTolerance: 1, paymentTolerance: 1, invoiceDateToleranceDays: 7, paymentDateToleranceDays: 15 });
+  console.log(`\nRDC receipts=${rdc.transactions.filter(t=>t.voucherType==='RECEIPT').length}`);
+  const unRdcPay = r.unmatchedRdc.filter(m => m.rdcTxn?.voucherType === 'RECEIPT');
+  console.log(`unmatched RDC receipts=${unRdcPay.length}, first 4:`);
+  for (const m of unRdcPay.slice(0,4)) console.log(`   ${m.rdcTxn?.date} ref="${m.rdcTxn?.referenceNo}" amt=${m.rdcAmount}`);
+  const unCustPay = r.unmatchedCustomer.filter(m => m.customerTxn?.voucherType === 'PAYMENT');
+  console.log(`unmatched CUST payments=${unCustPay.length}, first 4:`);
+  for (const m of unCustPay.slice(0,4)) console.log(`   ${m.customerTxn?.date} vno="${m.customerTxn?.voucherNo}" amt=${m.customerAmount}`);
+})();

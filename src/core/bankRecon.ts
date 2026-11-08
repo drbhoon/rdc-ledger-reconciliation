@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import { parseAmount } from './amount';
 import { parseDate, daysBetween } from './date';
 
-export type BankEntry = { id: string; source: 'BANK' | 'PAYMENT' | 'RECEIPT'; sheet: string; row: number; date: string; amount: number; reference: string; description: string; status: string; balance?: number };
+export type BankEntry = { id: string; source: 'BANK' | 'PAYMENT' | 'RECEIPT'; sheet: string; row: number; date: string; time?: string; amount: number; reference: string; description: string; status: string; balance?: number };
 export type BankMatch = { bank: BankEntry; book: BankEntry; evidence: string };
 const clean = (s: unknown) => String(s ?? '').trim();
 const key = (s: string) => {
@@ -13,8 +13,13 @@ const hasReference = (b: BankEntry, ref: string) => key(b.reference) === ref || 
 const date = (v: unknown) => parseDate(typeof v === 'string' ? v.trim().replace(/\s+\d{1,2}:\d{2}:\d{2}$/, '') : v);
 const col = (row: unknown[], name: RegExp) => row.findIndex(v => name.test(clean(v)));
 
-export function readBankFiles(files: Buffer[]): { entries: BankEntry[]; warnings: string[]; seen: string[]; bankOpening?: number; bankClosing?: number } {
-  const entries: BankEntry[] = [], warnings: string[] = [], seen = new Set<string>();
+export function readBankFiles(files: Buffer[]): { entries: BankEntry[]; warnings: string[]; notes: string[]; seen: string[]; bankOpening?: number; bankClosing?: number } {
+  const entries: BankEntry[] = [], warnings: string[] = [], notes: string[] = [], seen = new Set<string>();
+  let firstBankRows = new Map<string, number>();
+  const bankFingerprint = (row: unknown[], header: unknown[]) => {
+    const at = (pattern: RegExp) => clean(row[col(header, pattern)]);
+    return JSON.stringify([at(/^transaction date$/i), at(/^transaction description$/i), parseAmount(row[col(header, /^payment$/i)]), parseAmount(row[col(header, /^receipt$/i)]), at(/^reference no/i), at(/^value date$/i), at(/^running balance$/i)]);
+  };
   let bankOpening: number | undefined, bankClosing: number | undefined;
   for (let f = 0; f < files.length; f++) {
     const wb = XLSX.read(files[f], { type: 'buffer', cellDates: true });
@@ -29,7 +34,19 @@ export function readBankFiles(files: Buffer[]): { entries: BankEntry[]; warnings
       }
       if (!type) continue;
       // Do not silently combine two copies of a statement or register.
-      if (seen.has(type)) { warnings.push(`Skipped additional ${type} sheet ${sheet}; select one source per type.`); continue; }
+      if (seen.has(type)) {
+        if (type === 'BANK') {
+          const remaining = new Map(firstBankRows); let distinct = 0, checked = 0;
+          for (const row of rows.slice(header + 1)) {
+            if (!date(row[col(rows[header], /^transaction date$/i)])) continue;
+            const fingerprint = bankFingerprint(row, rows[header]); const count = remaining.get(fingerprint) || 0;
+            if (count) { remaining.set(fingerprint, count - 1); checked++; } else distinct++;
+          }
+          if (checked && !distinct) notes.push(`Additional bank sheet ${sheet} was checked: its ${checked} transactions already appear in the selected statement, so they were not counted twice.`);
+          else warnings.push(`Additional bank sheet ${sheet} contains ${distinct} row(s) not identified in the selected statement. It was not included; review for missing transactions.`);
+        } else warnings.push(`Skipped additional ${type} sheet ${sheet}; select one source per type.`);
+        continue;
+      }
       seen.add(type);
       if (type === 'BANK') {
         for (const row of rows.slice(0, header)) {
@@ -50,13 +67,43 @@ export function readBankFiles(files: Buffer[]): { entries: BankEntry[]; warnings
       for (let i = header + 1; i < rows.length; i++) {
         const row = rows[i]; const d = date(row[dt]);
         const a = type === 'BANK' ? parseAmount(row[credit]) - parseAmount(row[debit]) : Math.abs(parseAmount(row[amount])) * (type === 'PAYMENT' ? -1 : 1);
+        if (type === 'BANK' && /^transaction date$/i.test(clean(row[dt])) && /transaction description/i.test(clean(row[desc]))) continue;
         if (!d || !a) { if (row.some(v => clean(v))) skipped++; continue; }
-        entries.push({ id: `${f}:${sheet}:${i + 1}`, source: type, sheet, row: i + 1, date: d, amount: Math.round(a * 100) / 100, reference: clean(row[ref]), description: [clean(row[desc]), comment >= 0 ? clean(row[comment]) : ''].filter(Boolean).join(' | '), status: status >= 0 ? clean(row[status]) : '', balance: balance >= 0 && clean(row[balance]) ? parseAmount(row[balance]) : undefined });
+        if (type === 'BANK') { const fingerprint = bankFingerprint(row, h); firstBankRows.set(fingerprint, (firstBankRows.get(fingerprint) || 0) + 1); }
+        const time = typeof row[dt] === 'string' ? row[dt].match(/\b(\d{2}:\d{2}:\d{2})\s*$/)?.[1] : undefined;
+        entries.push({ id: `${f}:${sheet}:${i + 1}`, source: type, sheet, row: i + 1, date: d, time, amount: Math.round(a * 100) / 100, reference: clean(row[ref]), description: [clean(row[desc]), comment >= 0 ? clean(row[comment]) : ''].filter(Boolean).join(' | '), status: status >= 0 ? clean(row[status]) : '', balance: balance >= 0 && clean(row[balance]) ? parseAmount(row[balance]) : undefined });
       }
       if (skipped) warnings.push(`${sheet}: ${skipped} non-empty rows could not be read as dated transactions; review source.`);
     }
   }
-  return { entries, warnings, seen: [...seen], bankOpening, bankClosing };
+  return { entries, warnings, notes, seen: [...seen], bankOpening, bankClosing };
+}
+
+/** Verify the running balance in chronological order. Transactions with the
+ * same timestamp can be ordered by their balance transitions; never merge or
+ * discard rows. All transitions must form a continuous path from opening. */
+export function auditBankSequence(entries: BankEntry[], opening?: number, closing?: number): boolean {
+  const bank = entries.filter(e => e.source === 'BANK');
+  if (opening == null || closing == null || !bank.length || bank.some(e => e.balance == null)) return false;
+  const groups = new Map<string, BankEntry[]>();
+  for (const e of bank) { const k = e.date + ' ' + (e.time || ''); const list = groups.get(k) || []; list.push(e); groups.set(k, list); }
+  let current = Math.round(opening * 100);
+  for (const groupKey of [...groups.keys()].sort()) {
+    const group = groups.get(groupKey)!;
+    const edges = new Map<number, number[]>();
+    for (const e of group) { const end = Math.round(e.balance! * 100); const start = end - Math.round(e.amount * 100); const out = edges.get(start) || []; out.push(end); edges.set(start, out); }
+    const stack = [current]; const path: number[] = [];
+    while (stack.length) { const v = stack[stack.length - 1], out = edges.get(v); if (out?.length) stack.push(out.pop()!); else path.push(stack.pop()!); }
+    if (path.length !== group.length + 1) return false;
+    path.reverse();
+    // Hierholzer only yields a valid contiguous path when every original edge
+    // is represented, including when balance values repeat.
+    const counts = new Map<string, number>();
+    for (const e of group) { const end = Math.round(e.balance! * 100); const start = end - Math.round(e.amount * 100); const k = `${start}:${end}`; counts.set(k, (counts.get(k) || 0) + 1); }
+    for (let i = 1; i < path.length; i++) { const k = `${path[i - 1]}:${path[i]}`; const n = counts.get(k) || 0; if (!n) return false; counts.set(k, n - 1); }
+    current = path[path.length - 1];
+  }
+  return current === Math.round(closing * 100);
 }
 
 /** Compute a cutoff balance only when the statement's opening, all parsed

@@ -13,8 +13,9 @@ const hasReference = (b: BankEntry, ref: string) => key(b.reference) === ref || 
 const date = (v: unknown) => parseDate(typeof v === 'string' ? v.trim().replace(/\s+\d{1,2}:\d{2}:\d{2}$/, '') : v);
 const col = (row: unknown[], name: RegExp) => row.findIndex(v => name.test(clean(v)));
 
-export function readBankFiles(files: Buffer[]): { entries: BankEntry[]; warnings: string[]; seen: string[] } {
+export function readBankFiles(files: Buffer[]): { entries: BankEntry[]; warnings: string[]; seen: string[]; bankOpening?: number; bankClosing?: number } {
   const entries: BankEntry[] = [], warnings: string[] = [], seen = new Set<string>();
+  let bankOpening: number | undefined, bankClosing: number | undefined;
   for (let f = 0; f < files.length; f++) {
     const wb = XLSX.read(files[f], { type: 'buffer', cellDates: true });
     for (const sheet of wb.SheetNames) {
@@ -30,6 +31,13 @@ export function readBankFiles(files: Buffer[]): { entries: BankEntry[]; warnings
       // Do not silently combine two copies of a statement or register.
       if (seen.has(type)) { warnings.push(`Skipped additional ${type} sheet ${sheet}; select one source per type.`); continue; }
       seen.add(type);
+      if (type === 'BANK') {
+        for (const row of rows.slice(0, header)) {
+          const label = clean(row[0]);
+          if (/^opening balance$/i.test(label) && clean(row[1])) bankOpening = parseAmount(row[1]);
+          if (/^closing balance$/i.test(label) && clean(row[1])) bankClosing = parseAmount(row[1]);
+        }
+      }
       const h = rows[header];
       const dt = col(h, type === 'BANK' ? /^transaction date$/i : type === 'PAYMENT' ? /^check date$/i : /^receipt date$/i);
       const amount = col(h, type === 'PAYMENT' ? /^cleared amount$/i : /^receipt amount$/i);
@@ -48,10 +56,23 @@ export function readBankFiles(files: Buffer[]): { entries: BankEntry[]; warnings
       if (skipped) warnings.push(`${sheet}: ${skipped} non-empty rows could not be read as dated transactions; review source.`);
     }
   }
-  return { entries, warnings, seen: [...seen] };
+  return { entries, warnings, seen: [...seen], bankOpening, bankClosing };
 }
 
-export function reconcileBank(entries: BankEntry[], cutoff: string, bookBalance: number, bankBalance: number) {
+/** Compute a cutoff balance only when the statement's opening, all parsed
+ * movements and printed closing agree; never use a zero as a missing balance. */
+export function statementBalance(entries: BankEntry[], cutoff: string, opening?: number, closing?: number) {
+  const bank = entries.filter(e => e.source === 'BANK');
+  if (opening == null || closing == null || !bank.length) return { balance: undefined, verified: false };
+  const dates = bank.map(e => e.date).sort();
+  const sum = bank.reduce((s, e) => s + Math.round(e.amount * 100), 0);
+  const gap = Math.round(opening * 100) + sum - Math.round(closing * 100);
+  if (Math.abs(gap) > 1 || cutoff < dates[0] || cutoff > dates[dates.length - 1]) return { balance: undefined, verified: false };
+  const upto = bank.filter(e => e.date <= cutoff).reduce((s, e) => s + Math.round(e.amount * 100), 0);
+  return { balance: (Math.round(opening * 100) + upto) / 100, verified: true };
+}
+
+export function reconcileBank(entries: BankEntry[], cutoff: string, bookBalance?: number, bankBalance?: number) {
   const bank = entries.filter(e => e.source === 'BANK'), book = entries.filter(e => e.source !== 'BANK');
   const used = new Set<string>(); const matches: BankMatch[] = [];
   const buckets = new Map<string, BankEntry[]>();
@@ -77,12 +98,13 @@ export function reconcileBank(entries: BankEntry[], cutoff: string, bookBalance:
   const outstanding = entries.filter(e => e.date <= cutoff && !pairedAtCutoff.has(e.id) && !/cancel|void/i.test(e.status));
   const total = (fn: (e: BankEntry) => boolean) => Math.round(outstanding.filter(fn).reduce((s, e) => s + e.amount, 0) * 100) / 100;
   const lines = [
-    { label: 'Balance as per bank ledger (asset positive; overdraft negative)', amount: bookBalance },
     { label: 'Add: payments recorded in books, not debited by bank', amount: -total(e => e.source === 'PAYMENT') },
     { label: 'Less: receipts recorded in books, not credited by bank', amount: -total(e => e.source === 'RECEIPT') },
     { label: 'Less: bank debits not recorded in books', amount: total(e => e.source === 'BANK' && e.amount < 0) },
     { label: 'Add: bank credits not recorded in books', amount: total(e => e.source === 'BANK' && e.amount > 0) },
   ];
-  const calculated = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
-  return { matches, outstanding, later, lines, calculated, bankBalance, difference: Math.round((calculated - bankBalance) * 100) / 100 };
+  const adjustment = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
+  const calculated = bookBalance == null ? undefined : Math.round((bookBalance + adjustment) * 100) / 100;
+  const difference = calculated == null || bankBalance == null ? undefined : Math.round((calculated - bankBalance) * 100) / 100;
+  return { matches, outstanding, later, lines: bookBalance == null ? lines : [{ label: 'Balance as per bank ledger (asset positive; overdraft negative)', amount: bookBalance }, ...lines], calculated, bankBalance, difference };
 }
